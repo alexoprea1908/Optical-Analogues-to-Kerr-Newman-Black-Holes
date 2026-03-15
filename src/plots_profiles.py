@@ -2,33 +2,68 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-from constants import P0, DEFAULT_NUM_POINTS
+from constants import P0, DEFAULT_NUM_ANNULI, DEFAULT_NUM_POINTS
 from cases import SCHWARZSCHILD_CASES, KERR_NEWMAN_CASES
 from Schwarzchild import refractive_index_schwarzschild
 from Kerr_Newman import refractive_index_kn_continuous
 from annuli import annulus_edges_with_half_ends, sample_piecewise_constant
 
-def make_schwarzschild_profiles():
-    # In the paper, the optical black holes use outer radius P0 = 6
-    # and different b_inf values for Schwarzschild.
-    P = np.linspace(2.0, P0, DEFAULT_NUM_POINTS)
+def _schwarzschild_plot_colors(count):
+    base = ["blue", "orange", "green", "red"]
+    if count <= len(base):
+        return base[:count]
+    repeats = (count + len(base) - 1) // len(base)
+    return (base * repeats)[:count]
 
-    plt.figure(figsize=(8, 6))
-    for case in SCHWARZSCHILD_CASES:
-        n = refractive_index_schwarzschild(P, case["b_inf"], n_at_P0=1.0, P0=P0)
-        label = rf"$\hat b_{{\infty}}={case['b_inf']}$"
-        plt.plot(P, n, label=label)
 
-    plt.xlabel("P")
-    plt.ylabel("n(P)")
-    plt.title("Schwarzschild scalar refractive index profiles")
-    plt.yscale("log")
-    plt.grid(True, alpha=0.3)
+def make_schwarzschild_step_profiles(P_min=2.0, P_max=P0, n_annuli=DEFAULT_NUM_ANNULI):
+    """
+    Reproduce the notebook's step-plot of piecewise-constant indices.
+    """
+    b_inf_values = [case["b_inf"] for case in SCHWARZSCHILD_CASES]
+    colors = _schwarzschild_plot_colors(len(b_inf_values))
+
+    centers = np.linspace(P_min, P_max, n_annuli)
+
+    plt.figure(figsize=(8, 5))
+    for b_inf, color in zip(b_inf_values, colors):
+        n_values = refractive_index_schwarzschild(centers, b_inf, n_at_P0=1.0, P0=P_max)
+        plt.step(centers, n_values, where="mid", color=color, label=f"b_hat_inf = {b_inf}")
+
+    plt.xlabel("Radius R/M")
+    plt.ylabel("Refractive Index n")
+    plt.grid(True, which="both", ls="-", alpha=0.5)
     plt.legend()
     plt.tight_layout()
 
     os.makedirs("results/profiles", exist_ok=True)
-    plt.savefig("results/profiles/schwarzschild_profiles.png", dpi=200)
+    plt.savefig("results/profiles/schwarzschild_step_profiles.png", dpi=200)
+    plt.close()
+
+
+def make_schwarzschild_continuous_profiles(P_min=2.0, P_max=P0):
+    """
+    Reproduce the notebook's continuous plot of the scalar refractive index.
+    """
+    b_inf_values = [case["b_inf"] for case in SCHWARZSCHILD_CASES]
+    colors = _schwarzschild_plot_colors(len(b_inf_values))
+
+    radii = np.linspace(P_min, P_max, DEFAULT_NUM_POINTS)
+
+    plt.figure(figsize=(8, 5))
+    for b_inf, color in zip(b_inf_values, colors):
+        n_values = refractive_index_schwarzschild(radii, b_inf, n_at_P0=1.0, P0=P_max)
+        plt.plot(radii, n_values, color=color, label=f"b_hat_inf = {b_inf}")
+
+    plt.xlabel("Radius $R/M$")
+    plt.ylabel("Refractive Index $n(R/M)$")
+    plt.title("Scalar Refractive Index Profile")
+    plt.grid(True, which="both", ls="-", alpha=0.5)
+    plt.legend()
+    plt.tight_layout()
+
+    os.makedirs("results/profiles", exist_ok=True)
+    plt.savefig("results/profiles/schwarzschild_continuous_profiles.png", dpi=200)
     plt.close()
 
 
@@ -71,3 +106,13 @@ def make_kerr_newman_profiles():
     os.makedirs("results/profiles", exist_ok=True)
     fig.savefig("results/profiles/kerr_newman_profiles.png", dpi=250)
     plt.close(fig)
+
+
+def make_schwarzschild_profiles():
+    make_schwarzschild_step_profiles()
+    make_schwarzschild_continuous_profiles()
+
+
+if __name__ == "__main__":
+    make_schwarzschild_profiles()
+    make_kerr_newman_profiles()
