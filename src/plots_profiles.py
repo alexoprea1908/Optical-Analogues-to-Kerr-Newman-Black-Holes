@@ -1,5 +1,7 @@
 import os
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from constants import P0, DEFAULT_NUM_ANNULI, DEFAULT_NUM_POINTS
