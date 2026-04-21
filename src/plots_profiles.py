@@ -21,16 +21,20 @@ def _schwarzschild_plot_colors(count):
 def make_schwarzschild_step_profiles(P_min=2.0, P_max=P0, n_annuli=DEFAULT_NUM_ANNULI):
     """
     Reproduce the notebook's step-plot of piecewise-constant indices.
+    Uses the paper's half-width end-annuli convention.
     """
     b_inf_values = [case["b_inf"] for case in SCHWARZSCHILD_CASES]
     colors = _schwarzschild_plot_colors(len(b_inf_values))
 
-    centers = np.linspace(P_min, P_max, n_annuli)
+    edges = annulus_edges_with_half_ends(P_min, P_max, n_annuli)
 
     plt.figure(figsize=(8, 5))
     for b_inf, color in zip(b_inf_values, colors):
-        n_values = refractive_index_schwarzschild(centers, b_inf, n_at_P0=1.0, P0=P_max)
-        plt.step(centers, n_values, where="mid", color=color, label=f"b_hat_inf = {b_inf}")
+        _, n_values = sample_piecewise_constant(
+            refractive_index_schwarzschild, edges, b_inf, 1.0, P_max
+        )
+        x, y = _step_data(edges, n_values)
+        plt.step(x, y, where="post", color=color, label=f"b_hat_inf = {b_inf}")
 
     plt.xlabel("Radius R/M")
     plt.ylabel("Refractive Index n")

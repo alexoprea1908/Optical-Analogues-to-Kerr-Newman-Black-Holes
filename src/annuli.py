@@ -5,9 +5,14 @@ def annulus_edges_with_half_ends(P_min, P_max, n_annuli):
     """
     Outer and inner annuli have half the width of each interior annulus.
     Returns edges ordered from outer to inner.
+
+    Special case: for a single annulus, the system is just [P_max, P_min].
     """
-    if n_annuli < 2:
-        raise ValueError("n_annuli must be at least 2")
+    if n_annuli < 1:
+        raise ValueError("n_annuli must be at least 1")
+
+    if n_annuli == 1:
+        return np.array([P_max, P_min], dtype=float)
 
     total_width = P_max - P_min
     interior_width = total_width / (n_annuli - 1)
@@ -39,6 +44,7 @@ def sample_piecewise_constant(index_function, edges, *args, **kwargs):
 
     # Replace outermost / innermost by endpoint values, as stated in the paper
     values = np.asarray(values, dtype=float)
-    values[0] = index_function(np.array([edges[0]]), *args, **kwargs)[0]      # P_max
-    values[-1] = index_function(np.array([edges[-1]]), *args, **kwargs)[0]    # P_min
+    values[0] = index_function(np.array([edges[0]]), *args, **kwargs)[0]   # P_max
+    if len(values) > 1:
+        values[-1] = index_function(np.array([edges[-1]]), *args, **kwargs)[0]  # P_min
     return centers, values

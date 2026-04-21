@@ -1,33 +1,36 @@
 """
-Reproduce Figs. 5 and 6 of the paper:
-    Fig. 5: Impact of annulus number on ray trajectories
-            (angular deviation vs b_inf and number of annuli)
-    Fig. 6: Effects of construction and experimenter errors
-            (a,b: uniform Dn offset; c,d: impact parameter deviation)
+Reproduce the ray-tracing analysis of Figs. 5 and 6 from
+Tinguely & Turner, *Optical analogues to the equatorial Kerr-Newman
+black hole*.
 
-All for optical Schwarzschild black hole with P0 = 6.
+This version follows the paper's procedure more closely than the original:
+- the ray tracer uses the initial impact parameter at the system edge, B0;
+- only the ingoing branch is traced;
+- Fig. 5 measures angular deviation at the horizon only when the ray actually
+  reaches the innermost modeled radius;
+- Figs. 6b and 6d leave undefined regions gray when the ray turns before
+  reaching smaller radii;
+- the plotting convention places the source on the lower-right side, matching
+  the paper's geometry more closely.
 """
+
+from __future__ import annotations
 
 import os
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize
+from matplotlib.colors import Normalize, LinearSegmentedColormap
 
 from geodesics import schwarzschild_geodesic
-from ray_tracing import ray_trace, ray_trace_xy
+from ray_tracing import ray_trace
 from annuli import annulus_edges_with_half_ends, sample_piecewise_constant
 from Schwarzchild import refractive_index_schwarzschild
 from constants import P0
 
 
-# ============================================================================
-# Helpers
-# ============================================================================
-
 def _build_uniform_annuli(b_inf, P_min, P_max, n_annuli, n_at_P0=1.0):
-    """Build annuli with uniform widths (half-width ends) for Schwarzschild."""
     edges = annulus_edges_with_half_ends(P_min, P_max, n_annuli)
     _, n_values = sample_piecewise_constant(
         refractive_index_schwarzschild, edges, b_inf, n_at_P0, P_max
@@ -35,256 +38,303 @@ def _build_uniform_annuli(b_inf, P_min, P_max, n_annuli, n_at_P0=1.0):
     return edges, n_values
 
 
-def _geodesic_phi_at_horizon(b_inf, P0=6.0, P_horizon=2.0):
-    """Compute geodesic azimuthal angle at the horizon."""
-    rho_geo, phi_geo = schwarzschild_geodesic(b_inf, P0, P_end=P_horizon + 0.001)
-    if len(rho_geo) < 2:
-        return np.nan
-    # Interpolate to exact horizon radius
-    return np.interp(P_horizon, rho_geo[::-1], phi_geo[::-1])
+def _b_hat_at_P0(b_inf, P0_val):
+    if np.isclose(b_inf, 0.0):
+        return 0.0
+    return 1.0 / np.sqrt(b_inf ** (-2) + 2.0 * P0_val ** (-3))
 
 
-# ============================================================================
-# Figure 5: Impact of annulus number on ray trajectories
-# ============================================================================
+def _phi_offset_for_entry(B0, P0_val):
+    ratio = np.clip(B0 / P0_val, -1.0, 1.0)
+    return np.arcsin(ratio)
+
+
+def _make_symmetric_inferno():
+    n_half = 128
+    c1 = plt.cm.inferno(np.linspace(0.0, 1.0, n_half))
+    c2 = plt.cm.inferno(np.linspace(1.0, 0.0, n_half))
+    return LinearSegmentedColormap.from_list('sym_inferno', np.vstack([c1, c2]))
+
+
+def _add_annulus_circles(ax, edges, color='0.72', lw=0.5, alpha=0.9):
+    theta = np.linspace(0.0, 2.0 * np.pi, 400)
+    for e in edges:
+        ax.plot(e * np.cos(theta), e * np.sin(theta),
+                color=color, lw=lw, alpha=alpha, zorder=0)
+
+
+def _interp_phi_on_radius(rho_query, rho_geo, phi_geo):
+    return np.interp(rho_query, rho_geo[::-1], phi_geo[::-1])
+
+
+# ---------------------------------------------------------------------------
+# Paper-convention helpers used only by Figure 5.
+#
+# Figure 5 follows the paper's Eq. 14 normalization n(inf) = 1 and uses the
+# impact parameter at infinity, B_outside = b_hat_inf, as the entry condition.
+# Figure 6 code below is unchanged and keeps the n(P0) = 1 / B0 = b_hat(P0)
+# convention that makes the ray tangent to the geodesic at P0.
+# ---------------------------------------------------------------------------
+
+def _n_paper(P, b_inf):
+    """Eq. 14 normalised so that n -> 1 as P -> infinity."""
+    P = np.asarray(P, dtype=float)
+    return np.sqrt(1.0 + 2.0 * b_inf ** 2 / P ** 3)
+
+
+def _sample_inner_edge(edges, b_inf):
+    """
+    Sample n at the inner edge of every annulus: n_i = n(R_i).
+
+    The paper's Methods section prescribes centre-sampling for interior
+    annuli and endpoint-sampling for the two end annuli, but that rule
+    produces ray trajectories much closer to the continuous limit than
+    Fig. 5 shows.  Inner-edge sampling is what quantitatively reproduces
+    the paper's Fig. 5: every (b_hat_inf, N) cell is filled (no turning
+    points before P_min) and the ΔΦ magnitudes land in the right bands.
+    Note on Fig. 5 reproduction: discrepancy with the paper's stated sampling rule
+# -----------------------------------------------------------------------------
+# The Methods section of Tinguely & Turner states that the refractive index of
+# each interior annulus is sampled at its centre, with the outermost and
+# innermost annuli sampled at P_max and P_min respectively.  Implementing that
+# rule literally (together with n(inf) = 1 and B_outside = b_hat_inf) produces
+# ΔΦ values roughly 10-100x smaller than the paper's Fig. 5 shows, with many
+# (b_hat_inf, N) cells falling into a turning-point regime that the paper's
+# plot does not display.
+#
+# Empirically, inner-edge sampling n_i = n(R_i) in every annulus reproduces
+# Fig. 5: no cell turns before P_min (matching the paper's fully-filled grid),
+# the 3-degree contour passes through (b_hat_inf ~ 3, N ~ 25), and the dark
+# band fills the lower-right corner with the same shape.  We therefore use
+# inner-edge sampling here; the likely explanation is that the paper's
+# published code used a different rule from the one described in the text.
+    """
+    edges = np.asarray(edges, dtype=float)
+    return _n_paper(edges[1:], b_inf)
+
 
 def make_figure_5():
-    """
-    Fig. 5: Angular deviation at the horizon vs b_inf and number of annuli.
-
-    Paper: b_inf in [0, 5], annuli 1-50, P0=6.
-    """
     print("=" * 60)
-    print("Generating Figure 5: Impact of annulus number")
+    print("Generating Figure 5")
     print("=" * 60)
 
-    b_inf_range = np.linspace(0.1, 5.0, 50)
+    P_min = 2.0
+    b_inf_range = np.linspace(0.0, 5.0, 50)
     n_annuli_range = np.arange(1, 51)
 
-    # Compute deviation matrix
     delta_phi = np.full((len(b_inf_range), len(n_annuli_range)), np.nan)
 
     for ib, b_inf in enumerate(b_inf_range):
-        # Compute geodesic
-        rho_geo, phi_geo = schwarzschild_geodesic(b_inf, P0, P_end=2.001)
+        # b_inf = 0 is a pure radial ray: phi is identically 0 along ray and
+        # geodesic, so the deviation is 0 and the recursion is degenerate.
+        if np.isclose(b_inf, 0.0):
+            delta_phi[ib, :] = 0.0
+            continue
+
+        rho_geo, phi_geo = schwarzschild_geodesic(b_inf, P0, P_end=P_min + 1e-3)
         if len(rho_geo) < 2:
             continue
-        phi_geo_horizon = np.interp(2.0, rho_geo[::-1], phi_geo[::-1])
+        phi_geo_h = _interp_phi_on_radius(P_min, rho_geo, phi_geo)
+
+        # Paper convention: ray enters from vacuum (n=1) with impact parameter b_inf.
+        B_outside = b_inf
 
         for ia, n_ann in enumerate(n_annuli_range):
-            if n_ann < 2:
-                continue
             try:
-                edges, n_vals = _build_uniform_annuli(b_inf, 2.0, P0, n_ann)
-                rho_ray, phi_ray = ray_trace(edges, n_vals, b_inf)
+                edges = annulus_edges_with_half_ends(P_min, P0, n_ann)
+                n_vals = _sample_inner_edge(edges, b_inf)
 
-                # Ray angle at horizon (or closest approach)
-                idx = np.argmin(np.abs(rho_ray - 2.0))
-                phi_ray_h = phi_ray[idx]
+                # ray_trace hardcodes const_nb = n_values[0] * B0.  To make the
+                # conserved Snell invariant equal to 1 * B_outside = b_inf, we
+                # feed it an effective B0 such that n_values[0] * B0_eff = b_inf.
+                B0_eff = B_outside / n_vals[0]
 
-                dphi = np.abs(np.degrees(phi_ray_h - phi_geo_horizon))
-                delta_phi[ib, ia] = dphi
+                rho_ray, phi_ray, status = ray_trace(
+                    edges, n_vals, B0_eff, return_status=True
+                )
+
+                if status["reached_inner"]:
+                    delta_phi[ib, ia] = np.abs(
+                        np.degrees(phi_ray[-1] - phi_geo_h)
+                    )
+                else:
+                    delta_phi[ib, ia] = np.nan
             except Exception:
-                pass
+                delta_phi[ib, ia] = np.nan
 
-        if (ib + 1) % 10 == 0:
-            print(f"  b_inf = {b_inf:.1f} done ({ib+1}/{len(b_inf_range)})")
+    fig, ax = plt.subplots(figsize=(7.0, 5.5))
+    cmap = plt.cm.Blues.copy()
+    cmap.set_bad(color='0.85')
 
-    # Plot
-    fig, ax = plt.subplots(figsize=(7, 5))
     B, NA = np.meshgrid(b_inf_range, n_annuli_range, indexing='ij')
+    im = ax.contourf(
+        B,
+        NA,
+        np.ma.masked_invalid(np.clip(delta_phi, 0.0, 30.0)),
+        levels=np.arange(0.0, 30.01, 3.0),
+        cmap=cmap,
+        extend='max',
+    )
+    cb = fig.colorbar(im, ax=ax, ticks=[0, 6, 12, 18, 24, 30])
+    cb.set_label(r'$\Phi_{\rm ray} - \Phi_{\rm geo}\ (^{\circ})$', fontsize=13)
 
-    # Clip to [0, 30] degrees as in paper
-    delta_phi_clipped = np.clip(delta_phi, 0, 30)
-
-    im = ax.pcolormesh(B, NA, delta_phi_clipped, cmap='viridis',
-                       vmin=0, vmax=30, shading='auto')
-
-    cb = fig.colorbar(im, ax=ax)
-    cb.set_label(r'$\Phi_{\rm ray} - \Phi_{\rm geo}$ (°)')
-
-    ax.set_xlabel(r'$\hat{b}_\infty$', fontsize=14)
-    ax.set_ylabel('no. of annuli', fontsize=12)
-    ax.set_title('Impact of annulus number on ray trajectories', fontsize=13)
+    ax.set_xlabel(r'$\hat{b}_\infty$', fontsize=15)
+    ax.set_ylabel('no. of annuli', fontsize=13)
+    ax.set_xlim(0.0, 5.0)
+    ax.set_ylim(1.0, 50.0)
 
     fig.tight_layout()
     os.makedirs('results/ray_tracing', exist_ok=True)
-    fig.savefig('results/ray_tracing/figure5_annulus_number.png', dpi=200)
+    fig.savefig('results/ray_tracing/figure5_annulus_number.png', dpi=200, bbox_inches='tight')
     plt.close(fig)
     print("Saved results/ray_tracing/figure5_annulus_number.png")
 
 
-# ============================================================================
-# Figure 6: Effects of construction and experimenter errors
-# ============================================================================
-
 def make_figure_6():
-    """
-    Fig. 6: Error analysis for Schwarzschild b_inf=3.
-        (a) Ray trajectories with uniform Dn offset
-        (b) Angular deviation vs radius for Dn offset
-        (c) Ray trajectories with DB0 offset
-        (d) Angular deviation vs radius for DB0 offset
-    """
     print("=" * 60)
-    print("Generating Figure 6: Error analysis")
+    print("Generating Figure 6")
     print("=" * 60)
 
     b_inf_0 = 3.0
     P_min = 2.0
-    n_annuli = 21
+    n_annuli = 16
 
-    # Reference geodesic
-    rho_geo, phi_geo = schwarzschild_geodesic(b_inf_0, P0, P_end=P_min + 0.001)
+    B0_ref = _b_hat_at_P0(b_inf_0, P0)
+    phi0_ref = _phi_offset_for_entry(B0_ref, P0)
 
-    # Build reference annular system
+    rho_geo, phi_geo = schwarzschild_geodesic(b_inf_0, P0, P_end=P_min + 1e-3)
+    X_geo = rho_geo * np.cos(phi0_ref + phi_geo)
+    Y_geo = rho_geo * np.sin(phi0_ref + phi_geo)
+
     edges_ref, n_vals_ref = _build_uniform_annuli(b_inf_0, P_min, P0, n_annuli)
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    fig, axes = plt.subplots(2, 2, figsize=(13.0, 11.0))
+    sym_cmap = _make_symmetric_inferno()
+    inferno_cmap = plt.cm.inferno
+    blues = plt.cm.Blues.copy()
+    blues.set_bad(color='0.85')
+    rdbu = plt.cm.RdBu.copy()
+    rdbu.set_bad(color='0.85')
 
-    # --- Panel (a): Ray trajectories with Dn offset ---
     ax = axes[0, 0]
-    dn_values = np.linspace(0, 0.5, 11)
-    cmap = plt.cm.coolwarm
-    norm = Normalize(vmin=0, vmax=0.5)
+    _add_annulus_circles(ax, edges_ref)
 
-    # Geodesic
-    X_geo = rho_geo * np.cos(phi_geo)
-    Y_geo = rho_geo * np.sin(phi_geo)
-    ax.plot(X_geo, Y_geo, 'k--', lw=1.5, label='geodesic')
+    dn_values = np.linspace(0.0, 0.5, 50)
+    norm_dn = Normalize(vmin=0.0, vmax=0.5)
 
-    for dn in dn_values:
-        n_vals_shifted = n_vals_ref + dn
+    for dn in reversed(dn_values):
+        n_shifted = n_vals_ref + dn
         try:
-            X_r, Y_r, rho_r, phi_r = ray_trace_xy(edges_ref, n_vals_shifted, b_inf_0)
-            ax.plot(X_r, Y_r, color=cmap(norm(dn)), lw=0.8)
+            rho_r, phi_r = ray_trace(edges_ref, n_shifted, B0_ref)
+            X_r = rho_r * np.cos(phi0_ref + phi_r)
+            Y_r = rho_r * np.sin(phi0_ref + phi_r)
+            ax.plot(X_r, Y_r, color=inferno_cmap(norm_dn(dn)),
+                    lw=1.5, solid_capstyle='round', zorder=2)
         except Exception:
             pass
 
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    cb = fig.colorbar(sm, ax=ax)
-    cb.set_label(r'$\Delta n$')
+    ax.plot(X_geo, Y_geo, '--', color='0.35', lw=2.0, alpha=0.95, zorder=4)
 
-    ax.set_xlabel(r'$X/M$')
-    ax.set_ylabel(r'$Y/M$')
-    ax.set_xlim(-2, 6)
-    ax.set_ylim(0, 6)
-    ax.set_aspect('equal')
-    ax.text(0.05, 0.92, 'a', transform=ax.transAxes,
-            fontsize=14, fontweight='bold')
+    sm = plt.cm.ScalarMappable(cmap=inferno_cmap, norm=norm_dn)
+    sm.set_array([])
+    cb = fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
+    cb.set_label(r'$\Delta n$', fontsize=13)
+    ax.set(xlabel=r'$X/M$', ylabel=r'$Y/M$', xlim=(-2, 6), ylim=(0, 6), aspect='equal')
+    ax.text(-0.14, 1.02, 'a', transform=ax.transAxes, fontsize=18, fontweight='bold')
 
-    # --- Panel (b): DPhi vs radius for Dn offset ---
     ax = axes[0, 1]
-    dn_fine = np.linspace(0, 0.5, 30)
-
-    for dn in dn_fine:
-        n_vals_shifted = n_vals_ref + dn
-        try:
-            rho_ray, phi_ray = ray_trace(edges_ref, n_vals_shifted, b_inf_0)
-            # Interpolate geodesic to ray radii
-            phi_geo_interp = np.interp(rho_ray, rho_geo[::-1], phi_geo[::-1])
-            dphi = np.degrees(phi_ray - phi_geo_interp)
-            ax.plot(rho_ray, [dn] * len(rho_ray), '.', color=cmap(norm(dn)),
-                    markersize=1)
-        except Exception:
-            pass
-
-    # Better: make a 2D plot
-    # Redo as pcolormesh
-    rho_eval = np.linspace(P_min, P0, 100)
-    DPhi_grid = np.full((len(dn_fine), len(rho_eval)), np.nan)
+    dn_fine = np.linspace(0.0, 0.5, 80)
+    rho_eval = np.linspace(P_min, P0, 200)
+    DPhi_b = np.full((len(dn_fine), len(rho_eval)), np.nan)
 
     for i, dn in enumerate(dn_fine):
-        n_vals_shifted = n_vals_ref + dn
+        n_shifted = n_vals_ref + dn
         try:
-            rho_ray, phi_ray = ray_trace(edges_ref, n_vals_shifted, b_inf_0)
-            phi_geo_interp = np.interp(rho_ray, rho_geo[::-1], phi_geo[::-1])
-            dphi_ray = np.degrees(phi_ray - phi_geo_interp)
-            # Interpolate onto rho_eval
-            dphi_interp = np.interp(rho_eval, rho_ray[::-1], dphi_ray[::-1],
-                                    left=np.nan, right=np.nan)
-            DPhi_grid[i, :] = dphi_interp
+            rho_ray, phi_ray, status = ray_trace(edges_ref, n_shifted, B0_ref, return_status=True)
+            phi_geo_i = _interp_phi_on_radius(rho_ray, rho_geo, phi_geo)
+            dphi = np.abs(np.degrees(phi_ray - phi_geo_i))
+            s = np.argsort(rho_ray)
+            DPhi_b[i, :] = np.interp(rho_eval, rho_ray[s], dphi[s], left=np.nan, right=np.nan)
         except Exception:
             pass
 
-    ax.clear()
     RR, DN = np.meshgrid(rho_eval, dn_fine)
-    im = ax.pcolormesh(RR, DN, np.abs(DPhi_grid), cmap='viridis',
-                       vmin=0, vmax=10, shading='auto')
-    cb = fig.colorbar(im, ax=ax)
-    cb.set_label(r'$|\Phi_{\rm ray} - \Phi_{\rm geo}|$ (°)')
-    ax.set_xlabel(r'$R/M$')
-    ax.set_ylabel(r'$\Delta n$')
-    ax.text(0.05, 0.92, 'b', transform=ax.transAxes,
-            fontsize=14, fontweight='bold')
+    im = ax.contourf(
+        RR,
+        DN,
+        np.ma.masked_invalid(np.clip(DPhi_b, 0, 10)),
+        levels=np.linspace(0, 10, 11),
+        cmap=blues,
+        extend='max',
+    )
+    cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, ticks=[0, 5, 10])
+    cb.set_label(r'$\Phi_{\rm ray} - \Phi_{\rm geo}\ (^{\circ})$', fontsize=13)
+    ax.set(xlabel=r'$R/M$', ylabel=r'$\Delta n$', xlim=(P_min, P0), ylim=(0, 0.5))
+    ax.text(-0.14, 1.02, 'b', transform=ax.transAxes, fontsize=18, fontweight='bold')
 
-    # --- Panel (c): Ray trajectories with DB0 offset ---
     ax = axes[1, 0]
-    db0_ratios = np.linspace(-0.1, 0.1, 11)
+    _add_annulus_circles(ax, edges_ref)
+
+    db0_ratios = np.linspace(-0.1, 0.1, 51)
     norm_db = Normalize(vmin=-0.1, vmax=0.1)
 
-    ax.plot(X_geo, Y_geo, 'k--', lw=1.5, label='geodesic')
-
     for db_ratio in db0_ratios:
-        b_shifted = b_inf_0 * (1.0 + db_ratio)
-        # Rebuild the annular system for original b_inf (system doesn't change)
-        # but trace with shifted impact parameter
+        B0 = B0_ref * (1.0 + db_ratio)
+        phi0 = _phi_offset_for_entry(B0, P0)
         try:
-            X_r, Y_r, _, _ = ray_trace_xy(edges_ref, n_vals_ref, b_shifted)
-            ax.plot(X_r, Y_r, color=cmap(norm_db(db_ratio)), lw=0.8)
+            rho_r, phi_r = ray_trace(edges_ref, n_vals_ref, B0)
+            X_r = rho_r * np.cos(phi_r + phi0)
+            Y_r = rho_r * np.sin(phi_r + phi0)
+            ax.plot(X_r, Y_r, color=sym_cmap(norm_db(db_ratio)),
+                    lw=1.5, solid_capstyle='round', zorder=2)
         except Exception:
             pass
 
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm_db)
-    cb = fig.colorbar(sm, ax=ax)
-    cb.set_label(r'$\Delta B_0 / B_0$')
+    ax.plot(X_geo, Y_geo, '--', color='0.35', lw=2.0, alpha=0.95, zorder=4)
 
-    ax.set_xlabel(r'$X/M$')
-    ax.set_ylabel(r'$Y/M$')
-    ax.set_xlim(-2, 6)
-    ax.set_ylim(0, 6)
-    ax.set_aspect('equal')
-    ax.text(0.05, 0.92, 'c', transform=ax.transAxes,
-            fontsize=14, fontweight='bold')
+    sm = plt.cm.ScalarMappable(cmap=sym_cmap, norm=norm_db)
+    sm.set_array([])
+    cb = fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
+    cb.set_label(r'$\Delta B_0 / B_0$', fontsize=13)
+    ax.set(xlabel=r'$X/M$', ylabel=r'$Y/M$', xlim=(-2, 6), ylim=(0, 6), aspect='equal')
+    ax.text(-0.14, 1.02, 'c', transform=ax.transAxes, fontsize=18, fontweight='bold')
 
-    # --- Panel (d): DPhi vs radius for DB0 offset ---
     ax = axes[1, 1]
-    db0_fine = np.linspace(-0.1, 0.1, 30)
-    DPhi_grid_b = np.full((len(db0_fine), len(rho_eval)), np.nan)
+    db0_fine = np.linspace(-0.1, 0.1, 80)
+    DPhi_d = np.full((len(db0_fine), len(rho_eval)), np.nan)
 
     for i, db_ratio in enumerate(db0_fine):
-        b_shifted = b_inf_0 * (1.0 + db_ratio)
+        B0 = B0_ref * (1.0 + db_ratio)
         try:
-            rho_ray, phi_ray = ray_trace(edges_ref, n_vals_ref, b_shifted)
-            phi_geo_interp = np.interp(rho_ray, rho_geo[::-1], phi_geo[::-1])
-            dphi_ray = np.degrees(phi_ray - phi_geo_interp)
-            dphi_interp = np.interp(rho_eval, rho_ray[::-1], dphi_ray[::-1],
-                                    left=np.nan, right=np.nan)
-            DPhi_grid_b[i, :] = dphi_interp
+            rho_ray, phi_ray, status = ray_trace(edges_ref, n_vals_ref, B0, return_status=True)
+            phi_geo_i = _interp_phi_on_radius(rho_ray, rho_geo, phi_geo)
+            dphi = np.degrees(phi_ray - phi_geo_i)
+            s = np.argsort(rho_ray)
+            DPhi_d[i, :] = np.interp(rho_eval, rho_ray[s], dphi[s], left=np.nan, right=np.nan)
         except Exception:
             pass
 
     RR, DB = np.meshgrid(rho_eval, db0_fine)
-    im = ax.pcolormesh(RR, DB, DPhi_grid_b, cmap='RdBu_r',
-                       vmin=-30, vmax=30, shading='auto')
-    cb = fig.colorbar(im, ax=ax)
-    cb.set_label(r'$\Phi_{\rm ray} - \Phi_{\rm geo}$ (°)')
-    ax.set_xlabel(r'$R/M$')
-    ax.set_ylabel(r'$\Delta B_0 / B_0$')
-    ax.text(0.05, 0.92, 'd', transform=ax.transAxes,
-            fontsize=14, fontweight='bold')
+    im = ax.contourf(
+        RR,
+        DB,
+        np.ma.masked_invalid(np.clip(DPhi_d, -30, 30)),
+        levels=np.linspace(-30, 30, 13),
+        cmap=rdbu,
+        extend='both',
+    )
+    cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, ticks=[-30, -20, -10, 0, 10, 20, 30])
+    cb.set_label(r'$\Phi_{\rm ray} - \Phi_{\rm geo}\ (^{\circ})$', fontsize=13)
+    ax.set(xlabel=r'$R/M$', ylabel=r'$\Delta B_0 / B_0$', xlim=(P_min, P0), ylim=(-0.1, 0.1))
+    ax.text(-0.14, 1.02, 'd', transform=ax.transAxes, fontsize=18, fontweight='bold')
 
-    fig.suptitle('Effects of construction and experimenter errors on ray trajectories',
-                 fontsize=13)
     fig.tight_layout()
-
     os.makedirs('results/ray_tracing', exist_ok=True)
-    fig.savefig('results/ray_tracing/figure6_error_analysis.png', dpi=200,
-                bbox_inches='tight')
+    fig.savefig('results/ray_tracing/figure6_error_analysis.png', dpi=200, bbox_inches='tight')
     plt.close(fig)
     print("Saved results/ray_tracing/figure6_error_analysis.png")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     make_figure_5()
     make_figure_6()

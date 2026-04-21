@@ -1,99 +1,117 @@
 """
 Ray tracing through concentric annuli of constant scalar refractive index.
 
-Implements the algorithm described in the Methods section of the paper:
-    Phi_{i+1} - Phi_i = arcsin(B_{i+1}/R_{i+1}) - arcsin(B_{i+1}/R_i)   (Eq. 25)
-with the conservation law  n_i * B_i = constant.
+This implementation follows the ray-tracing procedure described in the
+Methods section of Tinguely & Turner, *Optical analogues to the equatorial
+Kerr-Newman black hole*.
 
-Convention
-----------
-- edges[0] = R_0 (outer edge), edges[-1] = R_N (inner edge)
-- n_values[i] = scalar index in annulus i (between edges[i] and edges[i+1])
-- The medium outside R_0 has index n_outside = 1.
+For a light ray crossing from annulus i to annulus i+1,
+
+    Phi_{i+1} - Phi_i
+        = arcsin(B_{i+1} / R_{i+1}) - arcsin(B_{i+1} / R_i)    (Eq. 25)
+
+with the conserved quantity n_i * B_i = constant.
+
+Conventions
+-----------
+- edges[0] = R_0 is the outer edge of the optical black hole.
+- edges[-1] = R_N is the innermost modeled radius.
+- n_values[i] is the scalar refractive index in annulus i,
+  i.e. between edges[i] and edges[i+1].
+- The medium outside R_0 has index n_outside = 1 by default.
+
+Important modeling choice from the paper
+----------------------------------------
+Only the ingoing branch is modeled. If the ray cannot reach the next inner
+boundary, we stop the trajectory at its minimum radius inside the current
+annulus. The outgoing branch is not traced.
 """
+
+from __future__ import annotations
 
 import numpy as np
 
 
-def ray_trace(edges, n_values, b_inf, n_outside=1.0):
-    """
-    Trace a ray inward through the annular system.
+def ray_trace(edges, n_values, B0, n_outside=1.0, return_status=False):
+    edges = np.asarray(edges, dtype=float)
+    n_values = np.asarray(n_values, dtype=float)
 
-    Parameters
-    ----------
-    edges : 1-D array, length N+1
-        Radii ordered from outer to inner: edges[0] > edges[1] > ... > edges[N].
-    n_values : 1-D array, length N
-        Refractive index in each annulus.
-    b_inf : float
-        Impact parameter at infinity (free-space).
-    n_outside : float
-        Refractive index outside the system (default 1).
-
-    Returns
-    -------
-    rho_traj : array of float
-        Radii along the trajectory (at each annulus boundary crossed).
-    phi_traj : array of float
-        Accumulated azimuthal angle at each radius.
-    """
-    N = len(n_values)
-    assert len(edges) == N + 1
-
-    # Conserved quantity: n * B = const = n_outside * B_outside
-    # At P0, the impact parameter is b_inf (since n_outside = 1)
-    C = n_outside * b_inf
+    if edges.ndim != 1 or n_values.ndim != 1:
+        raise ValueError("edges and n_values must be 1-D arrays")
+    if len(edges) != len(n_values) + 1:
+        raise ValueError("len(edges) must equal len(n_values) + 1")
+    if not np.all(edges[:-1] > edges[1:]):
+        raise ValueError("edges must be strictly decreasing from outer to inner")
+    if np.any(n_values <= 0.0):
+        raise ValueError("refractive indices must be strictly positive")
 
     rho_traj = [edges[0]]
     phi_traj = [0.0]
-
     phi = 0.0
 
-    for i in range(N):
+    const_nb = float(n_values[0]) * float(B0)
+    status = {
+        "reached_inner": False,
+        "turned_before_inner": False,
+        "turn_radius": None,
+        "turn_annulus": None,
+    }
+
+    for i, n_i in enumerate(n_values):
         R_outer = edges[i]
         R_inner = edges[i + 1]
-        n_i = n_values[i]
-        B_i = C / n_i  # impact parameter in this annulus
+        B_i = const_nb / n_i
 
-        # Check if ray can reach inner boundary
         if B_i >= R_inner:
-            # Ray turns around: closest approach at R = B_i
-            arg_outer = min(B_i / R_outer, 1.0)
-            dphi = np.pi / 2.0 - np.arcsin(arg_outer)
-            phi += dphi
+            arg_outer = np.clip(B_i / R_outer, -1.0, 1.0)
+            phi += np.pi / 2.0 - np.arcsin(arg_outer)
             rho_traj.append(B_i)
             phi_traj.append(phi)
+            status["turned_before_inner"] = True
+            status["turn_radius"] = float(B_i)
+            status["turn_annulus"] = int(i)
             break
 
-        # Angular change traversing this annulus (Eq. 25)
-        arg_inner = min(B_i / R_inner, 1.0)
-        arg_outer = min(B_i / R_outer, 1.0)
-
-        dphi = np.arcsin(arg_inner) - np.arcsin(arg_outer)
-        phi += dphi
+        arg_inner = np.clip(B_i / R_inner, -1.0, 1.0)
+        arg_outer = np.clip(B_i / R_outer, -1.0, 1.0)
+        phi += np.arcsin(arg_inner) - np.arcsin(arg_outer)
         rho_traj.append(R_inner)
         phi_traj.append(phi)
+    else:
+        status["reached_inner"] = True
 
-    return np.array(rho_traj), np.array(phi_traj)
+    rho_traj = np.asarray(rho_traj)
+    phi_traj = np.asarray(phi_traj)
+
+    if return_status:
+        return rho_traj, phi_traj, status
+    return rho_traj, phi_traj
 
 
-def ray_trace_xy(edges, n_values, b_inf, n_outside=1.0):
-    """Return Cartesian (X, Y) coordinates of the ray trajectory."""
-    rho, phi = ray_trace(edges, n_values, b_inf, n_outside)
-    X = rho * np.cos(phi)
-    Y = rho * np.sin(phi)
+def ray_trace_xy(edges, n_values, B0, n_outside=1.0, phi_offset=0.0, return_status=False):
+    result = ray_trace(
+        edges,
+        n_values,
+        B0,
+        n_outside=n_outside,
+        return_status=return_status,
+    )
+
+    if return_status:
+        rho, phi, status = result
+    else:
+        rho, phi = result
+
+    phi_plot = phi + phi_offset
+    X = rho * np.cos(phi_plot)
+    Y = rho * np.sin(phi_plot)
+
+    if return_status:
+        return X, Y, rho, phi, status
     return X, Y, rho, phi
 
 
-# ---------------------------------------------------------------------------
-# Helpers for building annular systems for Schwarzschild / Kerr-Newman
-# ---------------------------------------------------------------------------
-
 def build_schwarzschild_annuli(b_inf, P_min, P_max, n_annuli, n_at_P0=1.0):
-    """
-    Build uniform-thickness annuli (half-width end annuli) for a
-    Schwarzschild optical black hole.
-    """
     from annuli import annulus_edges_with_half_ends, sample_piecewise_constant
     from Schwarzchild import refractive_index_schwarzschild
 
@@ -104,11 +122,7 @@ def build_schwarzschild_annuli(b_inf, P_min, P_max, n_annuli, n_at_P0=1.0):
     return edges, n_values
 
 
-def build_kn_annuli(a, rho_Q, b_inf, ell_sign, P_min, P_max, n_annuli,
-                    n_at_P0=1.0):
-    """
-    Build uniform-thickness annuli for a Kerr-Newman optical black hole.
-    """
+def build_kn_annuli(a, rho_Q, b_inf, ell_sign, P_min, P_max, n_annuli, n_at_P0=1.0):
     from annuli import annulus_edges_with_half_ends, sample_piecewise_constant
     from Kerr_Newman import refractive_index_kn_continuous
 
@@ -120,32 +134,20 @@ def build_kn_annuli(a, rho_Q, b_inf, ell_sign, P_min, P_max, n_annuli,
     return edges, n_values
 
 
-# ---------------------------------------------------------------------------
-# Error analysis helpers (for Figs. 5 and 6)
-# ---------------------------------------------------------------------------
-
-def angular_deviation_at_horizon(edges, n_values, b_inf, rho_geo, phi_geo,
-                                  P_horizon=2.0):
-    """
-    Compute DeltaPhi = Phi_ray - Phi_geo at a given radius.
-    """
-    rho_ray, phi_ray = ray_trace(edges, n_values, b_inf)
-
-    idx = np.argmin(np.abs(rho_ray - P_horizon))
-    phi_ray_h = phi_ray[idx]
+def angular_deviation_at_horizon(edges, n_values, B0, rho_geo, phi_geo, P_horizon=2.0):
+    rho_ray, phi_ray, status = ray_trace(edges, n_values, B0, return_status=True)
+    if not status["reached_inner"]:
+        return np.nan
 
     if len(rho_geo) < 2:
         return np.nan
-    phi_geo_h = np.interp(rho_ray[idx], rho_geo[::-1], phi_geo[::-1])
 
-    return np.degrees(phi_ray_h - phi_geo_h)
+    phi_geo_h = np.interp(P_horizon, rho_geo[::-1], phi_geo[::-1])
+    return np.degrees(phi_ray[-1] - phi_geo_h)
 
 
-def deviation_vs_radius(edges, n_values, b_inf, rho_geo, phi_geo):
-    """
-    Compute DeltaPhi(R) = Phi_ray(R) - Phi_geo(R) at each annulus boundary.
-    """
-    rho_ray, phi_ray = ray_trace(edges, n_values, b_inf)
+def deviation_vs_radius(edges, n_values, B0, rho_geo, phi_geo):
+    rho_ray, phi_ray, status = ray_trace(edges, n_values, B0, return_status=True)
     phi_geo_interp = np.interp(rho_ray, rho_geo[::-1], phi_geo[::-1])
     delta_phi = np.degrees(phi_ray - phi_geo_interp)
-    return rho_ray, delta_phi
+    return rho_ray, delta_phi, status
