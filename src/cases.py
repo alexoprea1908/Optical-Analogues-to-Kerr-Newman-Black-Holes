@@ -1,4 +1,4 @@
-SCHWARZSCHILD_CASES = [
+SCHWARZSCHILD_CASES =[
     {"name": "schwarzschild_b2", "b_inf": 2.0},
     {"name": "schwarzschild_b3", "b_inf": 3.0},
     {"name": "schwarzschild_b4", "b_inf": 4.0},
@@ -54,5 +54,5 @@ KERR_NEWMAN_CASES = [
         "P_min": 1.96,
         "P_max": P0,
         "n_annuli": 21,
-    },
+    }
 ]

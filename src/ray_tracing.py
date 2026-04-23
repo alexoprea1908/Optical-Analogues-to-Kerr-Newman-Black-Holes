@@ -88,6 +88,101 @@ def ray_trace(edges, n_values, B0, n_outside=1.0, return_status=False):
     return rho_traj, phi_traj
 
 
+def ray_trace_with_outgoing(edges, n_values, B0, n_outside=1.0, return_status=False):
+    """
+    Same ingoing recursion as ray_trace, but if the ray turns inside some
+    annulus k (i.e. B_k >= R_{k+1}), continue the trajectory outward along
+    the symmetric outgoing branch: from rho_turn = B_k back up to R_k
+    (the outer edge of annulus k), then through annulus k-1, k-2, ..., 0
+    out to R_0.  Within each annulus the azimuthal sweep on the way out
+    has the same magnitude as on the way in (the ray is the time-reverse
+    of an ingoing ray with the same |B|), and phi keeps increasing.
+
+    If the ray reaches the innermost edge (edges[-1]) without turning,
+    behaviour is identical to ray_trace.
+    """
+    edges = np.asarray(edges, dtype=float)
+    n_values = np.asarray(n_values, dtype=float)
+
+    if edges.ndim != 1 or n_values.ndim != 1:
+        raise ValueError("edges and n_values must be 1-D arrays")
+    if len(edges) != len(n_values) + 1:
+        raise ValueError("len(edges) must equal len(n_values) + 1")
+    if not np.all(edges[:-1] > edges[1:]):
+        raise ValueError("edges must be strictly decreasing from outer to inner")
+    if np.any(n_values <= 0.0):
+        raise ValueError("refractive indices must be strictly positive")
+
+    rho_traj = [edges[0]]
+    phi_traj = [0.0]
+    phi = 0.0
+    const_nb = float(n_values[0]) * float(B0)
+    status = {
+        "reached_inner": False,
+        "turned_before_inner": False,
+        "turn_radius": None,
+        "turn_annulus": None,
+    }
+
+    turn_i = None
+    for i, n_i in enumerate(n_values):
+        R_outer = edges[i]
+        R_inner = edges[i + 1]
+        B_i = const_nb / n_i
+
+        if B_i >= R_inner:
+            arg_outer = np.clip(B_i / R_outer, -1.0, 1.0)
+            phi += np.pi / 2.0 - np.arcsin(arg_outer)
+            rho_traj.append(B_i)
+            phi_traj.append(phi)
+            status["turned_before_inner"] = True
+            status["turn_radius"] = float(B_i)
+            status["turn_annulus"] = int(i)
+            turn_i = i
+            break
+
+        arg_inner = np.clip(B_i / R_inner, -1.0, 1.0)
+        arg_outer = np.clip(B_i / R_outer, -1.0, 1.0)
+        phi += np.arcsin(arg_inner) - np.arcsin(arg_outer)
+        rho_traj.append(R_inner)
+        phi_traj.append(phi)
+    else:
+        status["reached_inner"] = True
+
+    # Outgoing branch, only if the ray turned inside some annulus.
+    if turn_i is not None:
+        # Leg 1: from rho_turn = B_k back up to the outer edge of annulus turn_i.
+        n_k = n_values[turn_i]
+        B_k = const_nb / n_k
+        R_outer_k = edges[turn_i]
+        arg_outer_k = np.clip(B_k / R_outer_k, -1.0, 1.0)
+        phi += np.pi / 2.0 - np.arcsin(arg_outer_k)
+        rho_traj.append(R_outer_k)
+        phi_traj.append(phi)
+
+        # Leg 2+: traverse annuli turn_i-1, turn_i-2, ..., 0 in outward direction.
+        # The azimuthal sweep in each annulus is the same magnitude as the
+        # ingoing sweep would have been, because B_j = const_nb / n_j is
+        # unchanged by the reflection and phi continues to increase.
+        for j in range(turn_i - 1, -1, -1):
+            n_j = n_values[j]
+            B_j = const_nb / n_j
+            R_outer_j = edges[j]
+            R_inner_j = edges[j + 1]
+            arg_inner_j = np.clip(B_j / R_inner_j, -1.0, 1.0)
+            arg_outer_j = np.clip(B_j / R_outer_j, -1.0, 1.0)
+            phi += np.arcsin(arg_inner_j) - np.arcsin(arg_outer_j)
+            rho_traj.append(R_outer_j)
+            phi_traj.append(phi)
+
+    rho_traj = np.asarray(rho_traj)
+    phi_traj = np.asarray(phi_traj)
+
+    if return_status:
+        return rho_traj, phi_traj, status
+    return rho_traj, phi_traj
+
+
 def ray_trace_xy(edges, n_values, B0, n_outside=1.0, phi_offset=0.0, return_status=False):
     result = ray_trace(
         edges,

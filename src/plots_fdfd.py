@@ -123,7 +123,7 @@ def make_figure_3():
     print("Generating Figure 3: Schwarzschild FDFD simulations")
     print("=" * 60)
 
-    b_inf_values = [2.0, 3.0, 4.0, 5.0]
+    b_inf_values = [1.0, 1.5, 0.1, 5.15]
     panel_labels = ['a', 'b', 'c', 'd']
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 12))
@@ -216,7 +216,7 @@ def make_figure_4():
 
     R_S = 2.0 * M
     R0_phys = P0 * M
-    B_INF = 3.0
+    B_INF = 1.0
 
     for idx, case in enumerate(KERR_NEWMAN_CASES):
         ax = axes[idx]
