@@ -3,8 +3,8 @@
 
 Implements the FDFD simulation framework described in the paper (refs. 58,59):
 - Helmholtz equation:  nabla^2 E_z + k0^2 * eps_r * E_z = -source
-- PML (Perfectly Matched Layer) boundary conditions
-- Gaussian beam source
+- Stretched-coordinate PML (Shin & Fan 2012)
+- Gaussian beam source channelled by thin absorbing waveguides
 
 Units: micrometers for length, with wavelength lambda = 0.5 um.
 """
@@ -66,7 +66,7 @@ class FDFD2D:
     where s_x, s_y are PML stretch factors.
     """
 
-    def __init__(self, Lx, Ly, dx, wavelength, N_pml=10):
+    def __init__(self, Lx, Ly, dx, wavelength, N_pml=12):
         """
         Parameters
         ----------
@@ -77,7 +77,10 @@ class FDFD2D:
         wavelength : float
             Free-space wavelength.
         N_pml : int
-            Number of PML cells on each side.
+            Number of PML cells on each side. Defaults to 12, which gives
+            adequate absorption for the Shin/Fan SC-PML formulation. The
+            paper's stated "lambda/5" is unrealistically thin numerically;
+            we trade a slightly larger domain for clean boundaries.
         """
         self.dx = dx
         self.wavelength = wavelength
@@ -148,15 +151,22 @@ class FDFD2D:
         self.eps_r = eps
 
     def set_gaussian_beam_source(self, B0, beam_sigma, R0_phys,
-                                  center_x=0.0, center_y=0.0):
+                                  center_x=0.0, center_y=0.0,
+                                  wg_strip_width=None):
         """
         Set up a Gaussian beam source propagating in +y direction toward the
         black hole center.
 
         Paper setup (Fig. 3): beam enters from below, propagates upward.
         Impact parameter B0 is the horizontal (x) offset from the center.
-        Absorbing waveguides at x = B0 ± lambda channel the beam from the
-        domain edge to the optical black hole edge.
+
+        Per the paper's Methods section, two thin absorbing waveguide STRIPS
+        are placed immediately to the left and right of the beam channel
+        (x in [B0 - lambda, B0 + lambda]), running from the bottom of the
+        physical domain up to the outer edge of the optical black hole.
+        These prevent the Gaussian from spreading sideways before reaching
+        the BH but, crucially, do NOT absorb the rest of the lower half of
+        the domain (where backscatter and side-scatter must remain visible).
 
         Parameters
         ----------
@@ -168,39 +178,61 @@ class FDFD2D:
             Outer radius of the optical black hole (physical units).
         center_x, center_y : float
             Center of the black hole.
+        wg_strip_width : float or None
+            Thickness of each absorbing strip. Defaults to 2*lambda, which
+            is enough to suppress lateral leakage from the beam but leaves
+            most of the domain transparent.
         """
         lam = self.wavelength
+        if wg_strip_width is None:
+            wg_strip_width = 2.0 * lam
+
         J = np.zeros((self.Nx, self.Ny), dtype=complex)
         x_beam = center_x + B0
 
         # Gaussian envelope in x, centered at the beam position
         envelope = np.exp(-((self.x - x_beam)**2) / (2.0 * beam_sigma**2))
 
-        # Truncate to waveguide width (2*lambda total, i.e. ± lambda)
+        # Truncate to waveguide channel (full width 2*lambda, i.e. ± lambda)
         wg_left = x_beam - lam
         wg_right = x_beam + lam
         wg_mask = (self.x >= wg_left) & (self.x <= wg_right)
         envelope *= wg_mask
 
-        # Place source at bottom edge of domain
-        y_start = self.y[self.N_pml + 1]  # just inside the PML
+        # Place source at bottom edge of physical domain (just inside PML)
+        y_start = self.y[self.N_pml + 1]
         iy_src = np.argmin(np.abs(self.y - y_start))
         J[:, iy_src] = envelope
 
         self.J_z = J
 
-        # Apply absorbing waveguide boundaries:
-        # absorbing strips at x < wg_left and x > wg_right,
-        # but only in the region below the black hole outer edge (y < 0)
-        # and outside the optical black hole
+        # ---- Thin absorbing waveguide STRIPS bordering the beam channel ----
+        #
+        # Two narrow vertical absorbers, one just left of x = wg_left and one
+        # just right of x = wg_right. They run from the bottom of the physical
+        # domain (y = -Ly/2) up to where the beam enters the BH outer circle.
         XX, YY = np.meshgrid(self.x, self.y, indexing='ij')
         R = np.sqrt((XX - center_x)**2 + (YY - center_y)**2)
 
-        # Waveguide region: below BH center, outside BH, outside beam channel
-        wg_region = (YY < center_y) & (R > R0_phys)
-        outside_channel = (XX < wg_left) | (XX > wg_right)
-        wg_absorb = wg_region & outside_channel
+        # Vertical extent: from bottom up to the BH entry point.
+        # The BH outer edge intersects x = x_beam at
+        #     y_entry = center_y - sqrt(R0_phys^2 - B0^2)   (when |B0| < R0)
+        # If |B0| >= R0 the beam never enters the BH; cap the strips at y=0.
+        if abs(B0) < R0_phys:
+            y_entry = center_y - np.sqrt(R0_phys**2 - B0**2)
+        else:
+            y_entry = center_y
 
+        # Strip 1: left side, x in (wg_left - w, wg_left)
+        # Strip 2: right side, x in (wg_right, wg_right + w)
+        left_strip = (XX > wg_left - wg_strip_width) & (XX < wg_left)
+        right_strip = (XX > wg_right) & (XX < wg_right + wg_strip_width)
+        vertical_extent = (YY < y_entry) & (YY > -self.Ny_phys * self.dx / 2)
+
+        # Make absolutely sure we never overwrite the black hole interior
+        outside_BH = R > R0_phys
+
+        wg_absorb = vertical_extent & outside_BH & (left_strip | right_strip)
         self.eps_r[wg_absorb] = 1.0 - 1j * np.pi
 
     def build_system(self):
@@ -353,7 +385,7 @@ class FDFD2D:
 
 def simulate_schwarzschild(b_inf, P_min=2.0, P0=6.0, n_annuli=16,
                             wavelength=0.5, M=2.5, resolution=15,
-                            verbose=True):
+                            N_pml=12, verbose=True):
     """
     Run FDFD simulation for an optical Schwarzschild black hole.
 
@@ -373,6 +405,8 @@ def simulate_schwarzschild(b_inf, P_min=2.0, P0=6.0, n_annuli=16,
         Black hole mass scale in micrometers. Default 2.5 (R_S = 5 um).
     resolution : int
         Grid points per wavelength.
+    N_pml : int
+        Number of PML cells on each side.
     verbose : bool
 
     Returns
@@ -389,9 +423,6 @@ def simulate_schwarzschild(b_inf, P_min=2.0, P0=6.0, n_annuli=16,
     L = 60 * wavelength  # 30 um
     dx = wavelength / resolution
 
-    # PML: lambda/5 as in paper
-    N_pml = max(int(round(wavelength / (5 * dx))), 4)
-
     if verbose:
         print(f"Schwarzschild FDFD: b_inf={b_inf}, M={M} um, lambda={wavelength} um")
         print(f"  Domain: {L:.1f} x {L:.1f} um, dx={dx:.4f} um, N_pml={N_pml}")
@@ -404,7 +435,6 @@ def simulate_schwarzschild(b_inf, P_min=2.0, P0=6.0, n_annuli=16,
     edges_phys = edges_dim * M
 
     # Set permittivity
-    # Inner core: absorbing (eps = n_inner^2 - i*pi)
     inner_eps = n_values[-1]**2 - 1j * np.pi
     fdfd.set_annular_permittivity(0.0, 0.0, edges_phys, n_values, inner_eps)
 
@@ -426,7 +456,7 @@ def simulate_schwarzschild(b_inf, P_min=2.0, P0=6.0, n_annuli=16,
 
 def simulate_kerr_newman(a, rho_Q, b_inf, ell_sign, P_min, P0=6.0,
                           n_annuli=21, wavelength=0.5, M=2.5,
-                          resolution=15, verbose=True):
+                          resolution=15, N_pml=12, verbose=True):
     """
     Run FDFD simulation for an optical Kerr-Newman black hole.
     """
@@ -436,11 +466,10 @@ def simulate_kerr_newman(a, rho_Q, b_inf, ell_sign, P_min, P0=6.0,
     L = 60 * wavelength
     dx = wavelength / resolution
 
-    N_pml = max(int(round(wavelength / (5 * dx))), 4)
-
     if verbose:
         print(f"Kerr-Newman FDFD: a={a}, rho_Q={rho_Q}, b_inf={b_inf}")
-        print(f"  Domain: {L:.1f} x {L:.1f} um, dx={dx:.4f} um")
+        print(f"  Domain: {L:.1f} x {L:.1f} um, dx={dx:.4f} um, "
+              f"N_pml={N_pml}, P_min={P_min:.3f}")
 
     fdfd = FDFD2D(L, L, dx, wavelength, N_pml)
 

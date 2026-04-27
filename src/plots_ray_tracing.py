@@ -402,9 +402,9 @@ def make_figure_6_full(builder=_build_uniform_annuli,
     print("Generating Figure 6 (with outgoing branch)")
     print("=" * 60)
 
-    b_inf_0 = 5.0
+    b_inf_0 = 3.0
     P_min = 2.0
-    n_annuli = 21
+    n_annuli = 16
 
     B0_ref = _b_hat_at_P0(b_inf_0, P0)
     phi0_ref = _phi_offset_for_entry(B0_ref, P0)

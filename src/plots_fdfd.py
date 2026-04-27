@@ -1,14 +1,18 @@
 """
 Reproduce Figs. 3 and 4 of the paper:
     Fig. 3: FDFD simulations of optical Schwarzschild black holes
-            (b_inf = 2, 3, 4, 5)
     Fig. 4: FDFD simulations of optical Kerr-Newman black holes
-            (4 cases with b_inf = 3)
+
+Each panel reads its parameters (b_inf, P_min, etc.) directly from the
+case dictionaries in `cases.py`, so changing b_inf in ONE place
+propagates everywhere consistently (including the auto-computed P_min for
+Kerr-Newman, which guards against placing the innermost annulus inside
+the n-divergence radius P_*).
 
 Paper parameters:
     lambda = 0.5 um, R_S = 2M = 5 um (M = 2.5 um), R_0 = P0*M = 15 um
     Domain: 60*lambda x 60*lambda = 30 x 30 um
-    PML: lambda/5
+    PML: lambda/5 in physical width (paper); we use ~12 cells for clean absorption
     Beam: Gaussian with delta = lambda/2, truncated at 2*lambda
 """
 
@@ -17,8 +21,6 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize
-from matplotlib.patches import Circle
 
 from fdfd import simulate_schwarzschild, simulate_kerr_newman
 from geodesics import schwarzschild_geodesic_xy, kerr_newman_geodesic_xy
@@ -35,10 +37,43 @@ P0 = 6.0               # dimensionless outer radius
 RESOLUTION = 10        # grid points per wavelength (paper uses ~25)
 N_ANNULI_SCH = 16      # Schwarzschild: 16 annuli (paper)
 N_ANNULI_KN = 21       # Kerr-Newman: 21 annuli (paper)
+N_PML = 12             # PML cells per side
+
+# Visual style
+CMAP = 'magma'         # perceptually uniform; cooler tone than 'inferno'
+ANNULUS_COLOR = '#cccccc'
+GEODESIC_COLOR = '#ffffff'
+LABEL_COLOR = '#ffffff'
+RH_COLOR = '#ff6699'   # horizon: distinct accent
+RS_COLOR = '#66ccff'   # Schwarzschild radius: blue accent (always shown)
+RMIN_COLOR = '#aaaaaa' # inner edge of simulated annular system
+R0_COLOR = '#ffffff'   # outer edge of optical BH
 
 
-def _add_annulus_edges(ax, edges, M_scale, color='w', lw=0.3, alpha=0.5):
-    """Draw annulus edges as circles."""
+# ============================================================================
+# Plotting helpers
+# ============================================================================
+
+def _circle(ax, R, color, lw=1.2, ls='-', alpha=0.9, label=None):
+    theta = np.linspace(0, 2 * np.pi, 360)
+    ax.plot(R * np.cos(theta), R * np.sin(theta),
+            color=color, lw=lw, ls=ls, alpha=alpha, label=label)
+
+
+def _label_on_circle(ax, R, angle_deg, text, color=LABEL_COLOR,
+                     fontsize=10, fontweight='bold'):
+    """Place a text label tangent to a circle of radius R at angle_deg."""
+    ang = np.deg2rad(angle_deg)
+    ax.text(R * np.cos(ang), R * np.sin(ang), text,
+            color=color, fontsize=fontsize, fontweight=fontweight,
+            ha='center', va='center',
+            bbox=dict(facecolor='black', edgecolor='none',
+                      alpha=0.55, pad=1.5))
+
+
+def _add_annulus_edges(ax, edges, M_scale, color=ANNULUS_COLOR,
+                        lw=0.3, alpha=0.4):
+    """Draw annulus edges as faint circles."""
     theta = np.linspace(0, 2 * np.pi, 300)
     for e in edges:
         r = e * M_scale
@@ -46,13 +81,8 @@ def _add_annulus_edges(ax, edges, M_scale, color='w', lw=0.3, alpha=0.5):
                 color=color, lw=lw, alpha=alpha)
 
 
-def _add_geodesic(ax, X, Y, color='w', lw=2):
-    """Overlay the true geodesic trajectory."""
-    ax.plot(X, Y, color=color, lw=lw, alpha=0.9)
-
-
-def _add_poynting_vectors(ax, fdfd, step=8, M_scale=1.0, color='w'):
-    """Overlay scaled Poynting vectors."""
+def _add_poynting_vectors(ax, fdfd, step=8, color=LABEL_COLOR):
+    """Overlay Poynting vectors scaled by 1/R as in the paper."""
     S_x, S_y = fdfd.compute_poynting()
 
     x_sub = fdfd.x[::step]
@@ -63,12 +93,10 @@ def _add_poynting_vectors(ax, fdfd, step=8, M_scale=1.0, color='w'):
     XX, YY = np.meshgrid(x_sub, y_sub, indexing='ij')
     R = np.sqrt(XX**2 + YY**2)
 
-    # Scale by 1/R as in paper
     Smag = np.sqrt(Sx_sub**2 + Sy_sub**2)
     scale = 1.0 / np.maximum(R, 0.5)
     Smag_scaled = Smag * scale
 
-    # Only show vectors with significant magnitude
     thresh = 0.02 * np.max(Smag_scaled)
     mask = Smag_scaled > thresh
 
@@ -76,7 +104,7 @@ def _add_poynting_vectors(ax, fdfd, step=8, M_scale=1.0, color='w'):
         ax.quiver(XX[mask], YY[mask],
                   Sx_sub[mask] * scale[mask],
                   Sy_sub[mask] * scale[mask],
-                  color=color, alpha=0.5, scale=None,
+                  color=color, alpha=0.55, scale=None,
                   headwidth=3, headlength=4, width=0.002)
 
 
@@ -117,84 +145,87 @@ def _geodesic_rotated_xy(rho, phi, b_inf, P0, M):
 def make_figure_3():
     """
     Fig. 3: FDFD simulations of optical Schwarzschild black holes.
-    Four panels: b_inf = 2, 3, 4, 5.
+    Reads cases from SCHWARZSCHILD_CASES.
     """
     print("=" * 60)
     print("Generating Figure 3: Schwarzschild FDFD simulations")
     print("=" * 60)
 
-    b_inf_values = [1.0, 1.5, 0.1, 5.15]
-    panel_labels = ['a', 'b', 'c', 'd']
-
-    fig, axes = plt.subplots(2, 2, figsize=(12, 12))
+    fig, axes = plt.subplots(2, 2, figsize=(12, 12),
+                              facecolor='black')
     axes = axes.ravel()
 
-    R_S = 2.0 * M  # Schwarzschild radius in um
+    R_S = 2.0 * M
     R0_phys = P0 * M
 
-    for idx, (b_inf, label) in enumerate(zip(b_inf_values, panel_labels)):
-        print(f"\n--- Panel {label}: b_inf = {b_inf} ---")
+    for idx, case in enumerate(SCHWARZSCHILD_CASES[:4]):
         ax = axes[idx]
+        b_inf = case['b_inf']
+        label = case.get('panel', chr(ord('a') + idx))
 
-        # Run FDFD simulation
+        print(f"\n--- Panel {label}: b_inf = {b_inf} ---")
+
         fdfd = simulate_schwarzschild(
             b_inf=b_inf, P_min=2.0, P0=P0,
             n_annuli=N_ANNULI_SCH, wavelength=WAVELENGTH, M=M,
-            resolution=RESOLUTION, verbose=True
+            resolution=RESOLUTION, N_pml=N_PML, verbose=True
         )
 
         # Plot |E|/max|E|
         E_norm = np.abs(fdfd.E_z) / np.max(np.abs(fdfd.E_z))
         im = ax.pcolormesh(fdfd.x, fdfd.y, E_norm.T,
-                           cmap='inferno', vmin=0, vmax=0.5,
+                           cmap=CMAP, vmin=0, vmax=0.5,
                            shading='auto', rasterized=True)
 
-        # Draw annulus edges
+        # Annulus edges (faint)
         edges, _ = build_schwarzschild_annuli(b_inf, 2.0, P0, N_ANNULI_SCH)
         _add_annulus_edges(ax, edges, M)
 
-        # Draw outer edge and Schwarzschild radius
-        theta = np.linspace(0, 2 * np.pi, 300)
-        ax.plot(R0_phys * np.cos(theta), R0_phys * np.sin(theta),
-                'w-', lw=1.5)
-        ax.plot(R_S * np.cos(theta), R_S * np.sin(theta), 'w-', lw=1.5)
-        ax.text(R_S * 0.7, R_S * 0.3, '$R_S$', color='w', fontsize=10)
+        # Outer edge of optical BH
+        _circle(ax, R0_phys, R0_COLOR, lw=1.5)
+        # Schwarzschild radius (= horizon for Schwarzschild)
+        _circle(ax, R_S, RS_COLOR, lw=1.6)
+        _label_on_circle(ax, R_S, 30, r'$R_S$', color=RS_COLOR)
 
-        # True geodesic (rotated to match beam entry from below)
+        # True geodesic
         _, _, rho_geo, phi_geo = schwarzschild_geodesic_xy(
             b_inf, P0, P_end=2.01)
-        X_geo, Y_geo = _geodesic_rotated_xy(
-            rho_geo, phi_geo, b_inf, P0, M)
-        ax.plot(X_geo, Y_geo, 'w-', lw=2.5, alpha=0.9)
+        X_geo, Y_geo = _geodesic_rotated_xy(rho_geo, phi_geo, b_inf, P0, M)
+        ax.plot(X_geo, Y_geo, color=GEODESIC_COLOR, lw=2.5, alpha=0.95)
 
-        # Poynting vectors
         _add_poynting_vectors(ax, fdfd, step=12)
 
-        # Labels
+        # Panel labels
         ax.text(0.05, 0.92, f'{label}', transform=ax.transAxes,
-                fontsize=16, fontweight='bold', color='w')
-        ax.text(0.05, 0.82, f'$\\hat{{b}}_\\infty = {int(b_inf)}$',
-                transform=ax.transAxes, fontsize=12, color='w')
+                fontsize=18, fontweight='bold', color=LABEL_COLOR)
+        ax.text(0.05, 0.85, rf'$\hat{{b}}_\infty = {b_inf:g}$',
+                transform=ax.transAxes, fontsize=12, color=LABEL_COLOR)
 
         ax.set_xlim(-15, 15)
         ax.set_ylim(-15, 15)
-        ax.set_xlabel('μm')
-        ax.set_ylabel('μm')
+        ax.set_xlabel('μm', color=LABEL_COLOR)
+        ax.set_ylabel('μm', color=LABEL_COLOR)
         ax.set_aspect('equal')
+        ax.set_facecolor('black')
+        ax.tick_params(colors=LABEL_COLOR)
+        for spine in ax.spines.values():
+            spine.set_color(LABEL_COLOR)
 
-        # Colorbar
         cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        cb.set_label(r'$|E|/\max|E|$')
+        cb.set_label(r'$|E|/\max|E|$', color=LABEL_COLOR)
+        cb.ax.tick_params(colors=LABEL_COLOR)
+        cb.outline.set_edgecolor(LABEL_COLOR)
 
     fig.suptitle('Numerical simulations of optical Schwarzschild black holes',
-                 fontsize=14, y=0.98)
+                 fontsize=14, color=LABEL_COLOR, y=0.98)
     fig.tight_layout()
 
     os.makedirs('results/fdfd', exist_ok=True)
-    fig.savefig('results/fdfd/figure3_schwarzschild_fdfd.png', dpi=200,
-                bbox_inches='tight')
+    out = 'results/fdfd/figure3_schwarzschild_fdfd.png'
+    fig.savefig(out, dpi=200, bbox_inches='tight',
+                facecolor=fig.get_facecolor())
     plt.close(fig)
-    print("\nSaved results/fdfd/figure3_schwarzschild_fdfd.png")
+    print(f"\nSaved {out}")
 
 
 # ============================================================================
@@ -204,19 +235,18 @@ def make_figure_3():
 def make_figure_4():
     """
     Fig. 4: FDFD simulations of optical Kerr-Newman black holes.
-    Four panels: extremal Kerr co-rot, extremal RN, KN co-rot, KN counter-rot.
-    All with b_inf = 3.
+    Reads cases (including b_inf and P_min) from KERR_NEWMAN_CASES.
     """
     print("=" * 60)
     print("Generating Figure 4: Kerr-Newman FDFD simulations")
     print("=" * 60)
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 12))
+    fig, axes = plt.subplots(2, 2, figsize=(12, 12),
+                              facecolor='black')
     axes = axes.ravel()
 
     R_S = 2.0 * M
     R0_phys = P0 * M
-    B_INF = 1.0
 
     for idx, case in enumerate(KERR_NEWMAN_CASES):
         ax = axes[idx]
@@ -224,91 +254,101 @@ def make_figure_4():
         a = case['a']
         rho_Q = case['rho_Q']
         ell_sign = case['ell_sign']
+        b_inf = case['b_inf']
         P_min = case['P_min']
 
-        print(f"\n--- Panel {label}: a={a}, rho_Q={rho_Q} ---")
+        print(f"\n--- Panel {label}: a={a}, rho_Q={rho_Q}, "
+              f"b_inf={b_inf}, P_min={P_min:.3f} ---")
 
-        # Run FDFD simulation
         fdfd = simulate_kerr_newman(
-            a=a, rho_Q=rho_Q, b_inf=B_INF, ell_sign=ell_sign,
+            a=a, rho_Q=rho_Q, b_inf=b_inf, ell_sign=ell_sign,
             P_min=P_min, P0=P0, n_annuli=N_ANNULI_KN,
-            wavelength=WAVELENGTH, M=M, resolution=RESOLUTION, verbose=True
+            wavelength=WAVELENGTH, M=M, resolution=RESOLUTION,
+            N_pml=N_PML, verbose=True
         )
 
-        # Plot |E|/max|E|
         E_norm = np.abs(fdfd.E_z) / np.max(np.abs(fdfd.E_z))
         im = ax.pcolormesh(fdfd.x, fdfd.y, E_norm.T,
-                           cmap='inferno', vmin=0, vmax=0.5,
+                           cmap=CMAP, vmin=0, vmax=0.5,
                            shading='auto', rasterized=True)
 
-        # Annulus edges
-        edges, _ = build_kn_annuli(a, rho_Q, B_INF, ell_sign,
+        edges, _ = build_kn_annuli(a, rho_Q, b_inf, ell_sign,
                                     P_min, P0, N_ANNULI_KN)
         _add_annulus_edges(ax, edges, M)
 
-        # Outer edge and important radii
-        theta = np.linspace(0, 2 * np.pi, 300)
-        ax.plot(R0_phys * np.cos(theta), R0_phys * np.sin(theta),
-                'w-', lw=1.5)
+        # Outer edge of optical BH
+        _circle(ax, R0_phys, R0_COLOR, lw=1.5)
 
-        # Horizon radius
-        from Kerr_Newman import delta_hat
-        # P_h where delta_hat = 0: P^2 - 2P + a^2 + rho_Q^2 = 0
+        # ---- Three radius circles, all with distinct styles & colors ----
+        # 1) Schwarzschild radius R_S = 2M  (always drawn for comparison)
+        _circle(ax, R_S, RS_COLOR, lw=1.4, ls='-')
+        # 2) Outer event horizon R_h (if it exists, i.e. no naked singularity)
         disc = 1.0 - a**2 - rho_Q**2
-        if disc >= 0:
-            P_h = 1.0 + np.sqrt(disc)
-            R_h = P_h * M
-            ax.plot(R_h * np.cos(theta), R_h * np.sin(theta), 'w--', lw=1.2)
-            ax.text(R_h * 0.6, R_h * 0.3, '$R_h$', color='w', fontsize=10,
-                    fontweight='bold')
-
-        # Schwarzschild radius
-        ax.plot(R_S * np.cos(theta), R_S * np.sin(theta), 'w-', lw=1.2)
-        ax.text(-R_S * 0.3, R_S * 0.6, '$R_S$', color='w', fontsize=10,
-                fontweight='bold')
-
-        # Inner edge
+        R_h = (1.0 + np.sqrt(disc)) * M if disc >= 0 else None
+        if R_h is not None:
+            _circle(ax, R_h, RH_COLOR, lw=1.4, ls='--')
+        # 3) Inner edge of the SIMULATED annular system (where the absorbing
+        #    core begins). Distinct from R_h whenever P_min > P_h.
         R_min = P_min * M
-        ax.plot(R_min * np.cos(theta), R_min * np.sin(theta), 'w-', lw=1.5)
+        _circle(ax, R_min, RMIN_COLOR, lw=1.0, ls=':')
 
-        # True geodesic (rotated to match beam entry from below)
+        # ---- Labels placed on (or near) the appropriate circles ----
+        # Stagger label angles so they don't overlap.
+        _label_on_circle(ax, R_S, 60, r'$R_S$', color=RS_COLOR)
+        if R_h is not None and abs(R_h - R_S) > 0.4:
+            _label_on_circle(ax, R_h, 120, r'$R_h$', color=RH_COLOR)
+        elif R_h is not None:
+            # When R_h is close to R_S (e.g. extremal RN), put R_h label below
+            _label_on_circle(ax, R_h, -60, r'$R_h$', color=RH_COLOR)
+        if abs(R_min - (R_h if R_h is not None else 0)) > 0.4 \
+                and abs(R_min - R_S) > 0.4:
+            _label_on_circle(ax, R_min, 200, r'$R_\min$',
+                             color=RMIN_COLOR, fontsize=9)
+
+        # True geodesic
         _, _, rho_geo, phi_geo = kerr_newman_geodesic_xy(
-            a, rho_Q, B_INF, ell_sign, P0, P_min + 0.01
+            a, rho_Q, b_inf, ell_sign, P0, P_min + 0.01
         )
-        X_geo, Y_geo = _geodesic_rotated_xy(
-            rho_geo, phi_geo, B_INF, P0, M)
-        ax.plot(X_geo, Y_geo, 'w-', lw=2.5, alpha=0.9)
+        X_geo, Y_geo = _geodesic_rotated_xy(rho_geo, phi_geo, b_inf, P0, M)
+        ax.plot(X_geo, Y_geo, color=GEODESIC_COLOR, lw=2.5, alpha=0.95)
 
-        # Poynting vectors
         _add_poynting_vectors(ax, fdfd, step=12)
 
-        # Label
+        # Panel label
         ax.text(0.05, 0.92, label, transform=ax.transAxes,
-                fontsize=16, fontweight='bold', color='w')
+                fontsize=18, fontweight='bold', color=LABEL_COLOR)
 
-        # Subtitle with parameters
-        subtitle = f'$\\hat{{a}}={a:.1f}$, $\\rho_Q={rho_Q:.1f}$'
+        # Subtitle: BH parameters and impact parameter
+        subtitle = (rf'$\hat{{a}}={a:+.2f}$, $\rho_Q={rho_Q:.2f}$, '
+                    rf'$\hat{{b}}_\infty={b_inf:g}$')
         ax.text(0.05, 0.02, subtitle, transform=ax.transAxes,
-                fontsize=10, color='w')
+                fontsize=10, color=LABEL_COLOR)
 
         ax.set_xlim(-15, 15)
         ax.set_ylim(-15, 15)
-        ax.set_xlabel('μm')
-        ax.set_ylabel('μm')
+        ax.set_xlabel('μm', color=LABEL_COLOR)
+        ax.set_ylabel('μm', color=LABEL_COLOR)
         ax.set_aspect('equal')
+        ax.set_facecolor('black')
+        ax.tick_params(colors=LABEL_COLOR)
+        for spine in ax.spines.values():
+            spine.set_color(LABEL_COLOR)
 
         cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        cb.set_label(r'$|E|/\max|E|$')
+        cb.set_label(r'$|E|/\max|E|$', color=LABEL_COLOR)
+        cb.ax.tick_params(colors=LABEL_COLOR)
+        cb.outline.set_edgecolor(LABEL_COLOR)
 
     fig.suptitle('Numerical simulations of optical Kerr–Newman black holes',
-                 fontsize=14, y=0.98)
+                 fontsize=14, color=LABEL_COLOR, y=0.98)
     fig.tight_layout()
 
     os.makedirs('results/fdfd', exist_ok=True)
-    fig.savefig('results/fdfd/figure4_kerr_newman_fdfd.png', dpi=200,
-                bbox_inches='tight')
+    out = 'results/fdfd/figure4_kerr_newman_fdfd.png'
+    fig.savefig(out, dpi=200, bbox_inches='tight',
+                facecolor=fig.get_facecolor())
     plt.close(fig)
-    print("\nSaved results/fdfd/figure4_kerr_newman_fdfd.png")
+    print(f"\nSaved {out}")
 
 
 if __name__ == "__main__":
