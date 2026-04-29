@@ -8,10 +8,10 @@ Kerr-Newman black hole*.
 For a light ray crossing from annulus i to annulus i+1,
 
     Phi_{i+1} - Phi_i
-        = arcsin(B_{i+1} / R_{i+1}) - arcsin(B_{i+1} / R_i)    (Eq. 25)
+        = arcsin(B_{i+1} / R_{i+1}) - arcsin(B_{i+1} / R_i)    (Eq. 25) what is B{i+1}, i think B{i+1} is the impact parameter inside i and i+1
 
 with the conserved quantity n_i * B_i = constant.
-
+I think Bi is the distance from the center of the black hole to the ray at the point where it crosses the boundary between annulus i and annulus i+1.
 Conventions
 -----------
 - edges[0] = R_0 is the outer edge of the optical black hole.
@@ -25,6 +25,7 @@ Important modeling choice from the paper
 Only the ingoing branch is modeled. If the ray cannot reach the next inner
 boundary, we stop the trajectory at its minimum radius inside the current
 annulus. The outgoing branch is not traced.
+what is azimuthal angle
 """
 
 from __future__ import annotations
@@ -45,11 +46,12 @@ def ray_trace(edges, n_values, B0, n_outside=1.0, return_status=False):
     if np.any(n_values <= 0.0):
         raise ValueError("refractive indices must be strictly positive")
 
-    rho_traj = [edges[0]]
-    phi_traj = [0.0]
+    rho_traj = [edges[0]]#rho_traj is the list of radial positions of the ray as it traverses the annuli, starting at the outer edge of the first annulus (edges[0]).
+    phi_traj = [0.0]#phi_traj is the list of azimuthal angles corresponding to the radial   
     phi = 0.0
-
-    const_nb = float(n_values[0]) * float(B0)
+#phi will be updated based on the formula: Phi_{i+1} - Phi_i = arcsin(B_{i+1} / R_{i+1}) - arcsin(B_{i+1} / R_i)    (Eq. 25).
+    const_nb = float(n_values[0]) * float(B0)# constant value which is conserved along the trajectory, niBi=const_nb
+    #n_values[0]=n at the outer edge of the first annulus, B0 is the initial impact parameter .
     status = {
         "reached_inner": False,
         "turned_before_inner": False,
@@ -58,15 +60,16 @@ def ray_trace(edges, n_values, B0, n_outside=1.0, return_status=False):
     }
 
     for i, n_i in enumerate(n_values):
+        #we enter annulus i, so Bi is the impact parameter at the boundary between annulus i and i+1
+        #why don t I reach inner if B_i >= R_{i+1}? explain using formula: Phi_{i+1} - Phi_i = arcsin(B_{i+1} / R_{i+1}) - arcsin(B_{i+1} / R_i)    (Eq. 25). if B_i >= R_{i+1}, then arcsin(B_{i+1} / R_{i+1}) is not defined, which means that the ray cannot reach the inner edge of the annulus because its impact parameter is too large. In this case, we stop the trajectory at its minimum radius inside the current annulus, which is given by B_i.
         R_outer = edges[i]
         R_inner = edges[i + 1]
         B_i = const_nb / n_i
-
-        if B_i >= R_inner:
-            arg_outer = np.clip(B_i / R_outer, -1.0, 1.0)
-            phi += np.pi / 2.0 - np.arcsin(arg_outer)
-            rho_traj.append(B_i)
-            phi_traj.append(phi)
+        if B_i >= R_inner:#I am in this annulus, but I cannot reach the inner edge because my impact parameter is too large. 
+            arg_outer = np.clip(B_i / R_outer, -1.0, 1.0)#why do we clip
+            phi += np.pi / 2.0 - np.arcsin(arg_outer)#thsi is an aproximation
+            rho_traj.append(B_i)#Bi is a x coordinate, ehy do we append it as a radius
+            phi_traj.append(phi)#why do we do the last three lines, if we only output the trajectopry until turn
             status["turned_before_inner"] = True
             status["turn_radius"] = float(B_i)
             status["turn_annulus"] = int(i)
@@ -78,7 +81,7 @@ def ray_trace(edges, n_values, B0, n_outside=1.0, return_status=False):
         rho_traj.append(R_inner)
         phi_traj.append(phi)
     else:
-        status["reached_inner"] = True
+        status["reached_inner"] = True#we reach the inner edge of the last annulus, which means that the ray has successfully traversed all the annuli and reached the innermost modeled radius.
 
     rho_traj = np.asarray(rho_traj)
     phi_traj = np.asarray(phi_traj)
@@ -152,6 +155,7 @@ def ray_trace_with_outgoing(edges, n_values, B0, n_outside=1.0, return_status=Fa
     # Outgoing branch, only if the ray turned inside some annulus.
     if turn_i is not None:
         # Leg 1: from rho_turn = B_k back up to the outer edge of annulus turn_i.
+        #since it doesn t reach R_inner, we want to see where it intersects the outer edge of the annulus, which is R_outer_k. The azimuthal sweep is given by phi += np.pi / 2.0 - np.arcsin(arg_outer_k), where arg_outer_k = B_k / R_outer_k. We then append the new position and angle to the trajectory lists.
         n_k = n_values[turn_i]
         B_k = const_nb / n_k
         R_outer_k = edges[turn_i]
@@ -164,7 +168,7 @@ def ray_trace_with_outgoing(edges, n_values, B0, n_outside=1.0, return_status=Fa
         # The azimuthal sweep in each annulus is the same magnitude as the
         # ingoing sweep would have been, because B_j = const_nb / n_j is
         # unchanged by the reflection and phi continues to increase.
-        for j in range(turn_i - 1, -1, -1):
+        for j in range(turn_i - 1, -1, -1):#decrese order, since on the way back we go through annuli in opposite order
             n_j = n_values[j]
             B_j = const_nb / n_j
             R_outer_j = edges[j]
@@ -174,10 +178,10 @@ def ray_trace_with_outgoing(edges, n_values, B0, n_outside=1.0, return_status=Fa
             phi += np.arcsin(arg_inner_j) - np.arcsin(arg_outer_j)
             rho_traj.append(R_outer_j)
             phi_traj.append(phi)
-
+#my Bi will be negative
     rho_traj = np.asarray(rho_traj)
     phi_traj = np.asarray(phi_traj)
-
+#explain why we need intermeidate point at turning annuli, Rmin=Bi.
     if return_status:
         return rho_traj, phi_traj, status
     return rho_traj, phi_traj
@@ -208,7 +212,9 @@ def ray_trace_xy(edges, n_values, B0, n_outside=1.0, phi_offset=0.0, return_stat
 
 def build_schwarzschild_annuli(b_inf, P_min, P_max, n_annuli, n_at_P0=1.0):
     from annuli import annulus_edges_with_half_ends, sample_piecewise_constant
-    from Schwarzchild import refractive_index_schwarzschild
+    # annulus_edges_with_half_ends generates the edges of the annuli based on the specified minimum and maximum radii (P_min and P_max) and the number of annuli (n_annuli). The edges are ordered from outer to inner.
+    # sample_piecewise_constant samples the refractive index at the centers of the annuli defined by the edges. It uses the refractive_index_schwarzschild function to compute the refractive index values at these centers 
+    from Schwarzchild import refractive_index_schwarzschild#computes the scaled refractive index values based on the formula from the paper
 
     edges = annulus_edges_with_half_ends(P_min, P_max, n_annuli)
     _, n_values = sample_piecewise_constant(

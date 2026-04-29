@@ -63,11 +63,11 @@ def _phi_offset_for_entry(B0, P0_val):
     return np.arcsin(ratio)
 
 
-def _make_symmetric_inferno():
+def _make_symmetric_plasma():
     n_half = 128
-    c1 = plt.cm.inferno(np.linspace(0.0, 1.0, n_half))
-    c2 = plt.cm.inferno(np.linspace(1.0, 0.0, n_half))
-    return LinearSegmentedColormap.from_list('sym_inferno', np.vstack([c1, c2]))
+    c1 = plt.cm.plasma(np.linspace(0.0, 1.0, n_half))
+    c2 = plt.cm.plasma(np.linspace(1.0, 0.0, n_half))
+    return LinearSegmentedColormap.from_list('sym_plasma', np.vstack([c1, c2]))
 
 
 def _add_annulus_circles(ax, edges, color='0.72', lw=0.5, alpha=0.9):
@@ -211,7 +211,7 @@ def make_figure_5(sampler=_sample_inner_edge,
                 delta_phi[ib, ia] = np.nan
 
     fig, ax = plt.subplots(figsize=(7.0, 5.5))
-    cmap = plt.cm.Blues.copy()
+    cmap = plt.cm.Purples.copy()
     cmap.set_bad(color='0.85')
 
     B, NA = np.meshgrid(b_inf_range, n_annuli_range, indexing='ij')
@@ -238,7 +238,7 @@ def make_figure_5(sampler=_sample_inner_edge,
     print(f"Saved {out_filename}")
 
 
-def make_figure_6():
+def make_figure_6():#does this function work
     print("=" * 60)
     print("Generating Figure 6")
     print("=" * 60)
@@ -257,12 +257,12 @@ def make_figure_6():
     edges_ref, n_vals_ref = _build_uniform_annuli(b_inf_0, P_min, P0, n_annuli)
 
     fig, axes = plt.subplots(2, 2, figsize=(13.0, 11.0))
-    sym_cmap = _make_symmetric_inferno()
-    inferno_cmap = plt.cm.inferno
-    blues = plt.cm.Blues.copy()
-    blues.set_bad(color='0.85')
-    rdbu = plt.cm.RdBu.copy()
-    rdbu.set_bad(color='0.85')
+    sym_cmap = _make_symmetric_plasma()
+    plasma_cmap = plt.cm.plasma
+    purples = plt.cm.Purples.copy()
+    purples.set_bad(color='0.85')
+    puor= plt.cm.PuOr.copy()
+    puor.set_bad(color='0.85')
 
     ax = axes[0, 0]
     _add_annulus_circles(ax, edges_ref)
@@ -276,14 +276,14 @@ def make_figure_6():
             rho_r, phi_r = ray_trace(edges_ref, n_shifted, B0_ref)
             X_r = rho_r * np.cos(phi0_ref + phi_r)
             Y_r = rho_r * np.sin(phi0_ref + phi_r)
-            ax.plot(X_r, Y_r, color=inferno_cmap(norm_dn(dn)),
+            ax.plot(X_r, Y_r, color=plasma_cmap(norm_dn(dn)),
                     lw=1.5, solid_capstyle='round', zorder=2)
         except Exception:
             pass
 
     ax.plot(X_geo, Y_geo, '--', color='0.35', lw=2.0, alpha=0.95, zorder=4)
 
-    sm = plt.cm.ScalarMappable(cmap=inferno_cmap, norm=norm_dn)
+    sm = plt.cm.ScalarMappable(cmap=plasma_cmap, norm=norm_dn)
     sm.set_array([])
     cb = fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
     cb.set_label(r'$\Delta n$', fontsize=13)
@@ -312,7 +312,7 @@ def make_figure_6():
         DN,
         np.ma.masked_invalid(np.clip(DPhi_b, 0, 10)),
         levels=np.linspace(0, 10, 11),
-        cmap=blues,
+        cmap=purples,
         extend='max',
     )
     cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, ticks=[0, 5, 10])
@@ -368,7 +368,7 @@ def make_figure_6():
         DB,
         np.ma.masked_invalid(np.clip(DPhi_d, -30, 30)),
         levels=np.linspace(-30, 30, 13),
-        cmap=rdbu,
+        cmap=puor,
         extend='both',
     )
     cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, ticks=[-30, -20, -10, 0, 10, 20, 30])
@@ -402,7 +402,7 @@ def make_figure_6_full(builder=_build_uniform_annuli,
     print("Generating Figure 6 (with outgoing branch)")
     print("=" * 60)
 
-    b_inf_0 = 3.0
+    b_inf_0 = 4.0
     P_min = 2.0
     n_annuli = 16
 
@@ -416,12 +416,12 @@ def make_figure_6_full(builder=_build_uniform_annuli,
     edges_ref, n_vals_ref = builder(b_inf_0, P_min, P0, n_annuli)
 
     fig, axes = plt.subplots(2, 2, figsize=(13.0, 11.0))
-    sym_cmap = _make_symmetric_inferno()
-    inferno_cmap = plt.cm.inferno
-    blues = plt.cm.Blues.copy()
-    blues.set_bad(color='0.85')
-    rdbu = plt.cm.RdBu.copy()
-    rdbu.set_bad(color='0.85')
+    sym_cmap = _make_symmetric_plasma()
+    plasma_cmap = plt.cm.plasma
+    purples = plt.cm.Purples.copy()
+    purples.set_bad(color='0.85')
+    puor = plt.cm.PuOr.copy()
+    puor.set_bad(color='0.85')
 
     # ---- Panel a: Δn scan, (X, Y), full trajectory ----
     ax = axes[0, 0]
@@ -436,14 +436,14 @@ def make_figure_6_full(builder=_build_uniform_annuli,
             rho_r, phi_r = ray_trace_with_outgoing(edges_ref, n_shifted, B0_ref)
             X_r = rho_r * np.cos(phi0_ref + phi_r)
             Y_r = rho_r * np.sin(phi0_ref + phi_r)
-            ax.plot(X_r, Y_r, color=inferno_cmap(norm_dn(dn)),
+            ax.plot(X_r, Y_r, color=plasma_cmap(norm_dn(dn)),
                     lw=1.5, solid_capstyle='round', zorder=2)
         except Exception:
             pass
 
     ax.plot(X_geo, Y_geo, '--', color='0.35', lw=2.0, alpha=0.95, zorder=4)
 
-    sm = plt.cm.ScalarMappable(cmap=inferno_cmap, norm=norm_dn)
+    sm = plt.cm.ScalarMappable(cmap=plasma_cmap, norm=norm_dn)
     sm.set_array([])
     cb = fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
     cb.set_label(r'$\Delta n$', fontsize=13)
@@ -476,7 +476,7 @@ def make_figure_6_full(builder=_build_uniform_annuli,
         RR, DN,
         np.ma.masked_invalid(np.clip(DPhi_b, 0, 10)),
         levels=np.linspace(0, 10, 11),
-        cmap=blues, extend='max',
+        cmap=purples, extend='max',
     )
     cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, ticks=[0, 5, 10])
     cb.set_label(r'$\Phi_{\rm ray} - \Phi_{\rm geo}\ (^{\circ})$', fontsize=13)
@@ -537,7 +537,7 @@ def make_figure_6_full(builder=_build_uniform_annuli,
         RR, DB,
         np.ma.masked_invalid(np.clip(DPhi_d, -30, 30)),
         levels=np.linspace(-30, 30, 13),
-        cmap=rdbu, extend='both',
+        cmap=puor, extend='both',
     )
     cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04,
                       ticks=[-30, -20, -10, 0, 10, 20, 30])

@@ -16,38 +16,79 @@ from scipy.integrate import solve_ivp
 def schwarzschild_geodesic(b_inf, P0, P_end=2.001, n_points=4000):
     """
     Integrate dϕ/dρ = ±(ρ⁴/b∞² − ρ² + 2ρ)^{-1/2}  (Eq. 10)
-    from ρ = P0 inward to ρ = P_end (or until the turning point).
+    from ρ = P0 inward to ρ = P_end. If the geodesic has a turning point
+    rho_turn > P_end (escaping ray), the integration is restarted at
+    rho_turn with the opposite sign and run back out to P0, so the full
+    in-and-out trajectory is returned.
 
-    Returns arrays (rho, phi) along the ingoing trajectory.
-    The sign convention is chosen so that ϕ increases as ρ decreases.
+    Returns arrays (rho, phi). For captured rays (no turning point above
+    P_end) the trajectory is purely ingoing and ends at P_end. For escaping
+    rays it descends from P0 to rho_turn and then rises back to P0, with
+    phi monotonically increasing throughout.
     """
 
-    def dphidrho(rho, phi):
-        arg = rho**4 / b_inf**2 - rho**2 + 2.0 * rho
-        if arg <= 0:
-            return 0.0
-        return -1.0 / np.sqrt(arg)          # minus: ρ decreasing, ϕ increasing
+    def _drho_phi(sign):
+        # sign = -1 : ingoing leg  (rho decreasing,  dphi/drho = -1/sqrt(...))
+        # sign = +1 : outgoing leg (rho increasing,  dphi/drho = +1/sqrt(...))
+        # In both cases dphi has the same sign as on a continuous trajectory
+        # bending consistently around the BH, so phi evolves monotonically
+        # across the turning point.
+        def f(rho, phi):
+            arg = rho**4 / b_inf**2 - rho**2 + 2.0 * rho
+            if arg <= 0:
+                return 0.0
+            return sign / np.sqrt(arg)
+        return f # we output a function that computes dphi/drho for a given sign
 
-    # Find turning point: ρ⁴/b∞² − ρ² + 2ρ = 0
-    # This is where the radial velocity vanishes.
-    # We'll let the integrator handle it by stopping when the radicand → 0.
-
+    # Terminal event for the ingoing leg: stop when the radicand reaches
+    # zero (turning point). direction=-1 catches a positive-to-negative
+    # crossing as rho decreases.
     def radicand_zero(rho, phi):
-        return rho**4 / b_inf**2 - rho**2 + 2.0 * rho - 1e-10
+        return rho**4 / b_inf**2 - rho**2 + 2.0 * rho - 1e-10#we substract a small number to avoid numerical issues with the root-finding when the radicand is very close to zero. 
     radicand_zero.terminal = True
     radicand_zero.direction = -1
 
-    rho_span = (P0, P_end)
-    rho_eval = np.linspace(P0, P_end, n_points)
+    rho_eval_in = np.linspace(P0, P_end, n_points)#1D array of rho values where we want to evaluate the solution of the ODE for the ingoing leg
 
-    sol = solve_ivp(
-        dphidrho, rho_span, [0.0],
-        t_eval=rho_eval, events=radicand_zero,
-        rtol=1e-10, atol=1e-12, method='DOP853', max_step=0.01
+    sol_in = solve_ivp(
+        _drho_phi(sign=-1), (P0, P_end), [0.0],
+        t_eval=rho_eval_in, events=radicand_zero,
+        rtol=1e-10, atol=1e-12, method='DOP853', max_step=0.01,
+    )#returns an object that contains the solution of the ODE
+    #1d array of phi values corresponding to the rho_eval_in array, obtained by integrating the ODE defined by _drho_phi with sign=-1 (ingoing leg) from P0 to P_end, starting with phi=0 at P0. The integration is stopped if the radicand reaches zero, which indicates a turning point.
+#how did u find this way of solving odes? I found it by looking at the documentation of scipy.integrate.solve_ivp, which is a powerful function for solving initial value problems for ODEs. 
+    rho_in = sol_in.t#the array of rho values where the solution was evaluated, 
+    phi_in = sol_in.y[0]#the array of phi values corresponding to the rho_in array, obtained from the solution of the ODE. sol_in.y is a 2D array where each row corresponds to a different variable (in this case we only have one variable phi), and sol_in.y[0] gives us the first row, which contains the phi values.
+
+    # If a turning point was hit above P_end, integrate the outgoing leg
+    # back out from rho_turn to P0 with sign = +1.
+    hit_turning = (
+        sol_in.t_events is not None
+        and len(sol_in.t_events) > 0
+        and len(sol_in.t_events[0]) > 0
     )
+  #sol_in.t_events
+    if hit_turning:
+        rho_turn = sol_in.t_events[0][0]
+        phi_turn = sol_in.y_events[0][0, 0]
 
-    rho = sol.t
-    phi = sol.y[0]
+        # Start slightly above rho_turn so the radicand is positive and
+        # the integrator does not immediately re-trigger any guard.
+        rho_start_out = rho_turn + 1e-6
+        rho_eval_out = np.linspace(rho_start_out, P0, n_points)
+
+        sol_out = solve_ivp(
+            _drho_phi(sign=+1), (rho_start_out, P0), [phi_turn],
+            t_eval=rho_eval_out,
+            rtol=1e-10, atol=1e-12, method='DOP853', max_step=0.01,
+        )
+
+        rho = np.concatenate([rho_in, sol_out.t])
+        phi = np.concatenate([phi_in, sol_out.y[0]])
+    else:
+        rho = rho_in
+        phi = phi_in
+
     return rho, phi
 
 
@@ -130,19 +171,19 @@ def kerr_newman_geodesic(a, rho_Q, b_inf, ell_sign, P0, P_end,
 
         return dphi_ds / drho_ds
 
-    def deriv_in(rho, y):
+    def deriv_in(rho, y):#inner leg
         return [_dphi_drho(rho, y[0], sign=-1)]
 
-    def deriv_out(rho, y):
+    def deriv_out(rho, y):#outer leg
         return [_dphi_drho(rho, y[0], sign=+1)]
 
     def turning_point(rho, y):
         D = _delta_hat(rho, a, rho_Q)
-        D = max(D, 0.0)
+        D = max(D, 0.0)#we take max with 0 to avoid numerical issues when D is slightly negative due to floating point errors, since D should be non-negative for the geodesic to be valid. 
         Vp, Vm = _V_pm_geo(rho, a, rho_Q, ell_sign)
         prefactor = ((rho**2 + a**2)**2 - a**2 * D) / rho**4
         val = prefactor * (b_inv - Vp) * (b_inv - Vm)
-        return val - 1e-10
+        return val - 1e-10#we output val - 1e-10 to create a small buffer for the root-finding, so that we stop slightly before the actual turning point where val would be zero. 
     turning_point.terminal = True
     turning_point.direction = -1
 

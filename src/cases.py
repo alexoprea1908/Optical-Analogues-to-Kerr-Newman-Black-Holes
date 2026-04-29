@@ -20,10 +20,10 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 SCHWARZSCHILD_CASES = [
-    {"name": "schwarzschild_b2", "panel": "a", "b_inf": 2.0},
+    {"name": "schwarzschild_b2", "panel": "a", "b_inf": 2.6},
     {"name": "schwarzschild_b3", "panel": "b", "b_inf": 3.0},
     {"name": "schwarzschild_b4", "panel": "c", "b_inf": 4.0},
-    {"name": "schwarzschild_b5", "panel": "d", "b_inf": 5.0},
+    {"name": "schwarzschild_b5", "panel": "d", "b_inf": 5.2},
 ]
 
 
@@ -123,7 +123,6 @@ KERR_NEWMAN_CASES = [
     }
     for panel, name, a, rho_Q, ell_sign in _kn_specs
 ]
-
 
 if __name__ == "__main__":
     # Quick sanity print: shows the radii used to choose P_min.
