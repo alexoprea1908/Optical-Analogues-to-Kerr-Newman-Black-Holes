@@ -3,11 +3,10 @@ Reproduce the ray-tracing analysis of Figs. 5 and 6 from
 Tinguely & Turner, *Optical analogues to the equatorial Kerr-Newman
 black hole*.
 
-This version follows the paper's procedure more closely than the original:
 - the ray tracer uses the initial impact parameter at the system edge, B0;
-- only the ingoing branch is traced;
+- we have one builder which traces only the ingoing branch of the ray, and another builder which traces the full ray with both ingoing and outgoing branches.  The former is used for Fig. 5 to match the paper's convention of measuring deviation at the horizon only when the ray actually reaches the innermost modeled radius; the latter is used for Fig. 6 to produce full trajectories even when the ray turns before reaching smaller radii.
 - Fig. 5 measures angular deviation at the horizon only when the ray actually
-  reaches the innermost modeled radius;
+  reaches the innermost modeled radius; for this we have to approaches: (1) center sampling as presented in the paper; howver, we do not replicate the gif 5 with this approach, (2) inner-edge sampling, which reproduces the paper's Fig. 5 closely.
 - Figs. 6b and 6d leave undefined regions gray when the ray turns before
   reaching smaller radii;
 - the plotting convention places the source on the lower-right side, matching
@@ -35,7 +34,7 @@ def _build_uniform_annuli(b_inf, P_min, P_max, n_annuli, n_at_P0=1.0):
     _, n_values = sample_piecewise_constant(
         refractive_index_schwarzschild, edges, b_inf, n_at_P0, P_max
     )
-    return edges, n_values
+    return edges, n_values#builds the annulus edges and the corresponding refractive index values at the centers of the annuli, sampling n at the centers of the annuli, with endpoint overrides for the outermost and innermost annuli.
 
 
 def _build_uniform_annuli_inneredge(b_inf, P_min, P_max, n_annuli, n_at_P0=1.0):
@@ -47,7 +46,7 @@ def _build_uniform_annuli_inneredge(b_inf, P_min, P_max, n_annuli, n_at_P0=1.0):
     """
     edges = annulus_edges_with_half_ends(P_min, P_max, n_annuli)
     n_values = refractive_index_schwarzschild(
-        edges[1:], b_inf, n_at_P0=n_at_P0, P0=P_max
+        edges[1:], b_inf, n_at_P0=n_at_P0, P0=P_max#we sample n at the inner edge of each annulus, which corresponds to edges[1:] since edges are ordered from outer to inner.
     )
     return edges, n_values
 
@@ -60,10 +59,10 @@ def _b_hat_at_P0(b_inf, P0_val):
 
 def _phi_offset_for_entry(B0, P0_val):
     ratio = np.clip(B0 / P0_val, -1.0, 1.0)
-    return np.arcsin(ratio)
-
-
-def _make_symmetric_plasma():
+    return np.arcsin(ratio)#we calculate the initial phi offset for the ray to enter the system with the specified impact parameter B0 at radius P0_val.
+#due to rotational symmetry, adding an offset at entry amounts to rotating my whole trajectory by this angle.
+#in ray tracing, we put phi=0 in the first annulus. but for plot we want the ray to enter the system at y=B0, for this we need to add angle offset of arcsin(B0/P0).
+def _make_symmetric_plasma():#this is just the colormap used for ploting
     n_half = 128
     c1 = plt.cm.plasma(np.linspace(0.0, 1.0, n_half))
     c2 = plt.cm.plasma(np.linspace(1.0, 0.0, n_half))
@@ -74,11 +73,11 @@ def _add_annulus_circles(ax, edges, color='0.72', lw=0.5, alpha=0.9):
     theta = np.linspace(0.0, 2.0 * np.pi, 400)
     for e in edges:
         ax.plot(e * np.cos(theta), e * np.sin(theta),
-                color=color, lw=lw, alpha=alpha, zorder=0)
+                color=color, lw=lw, alpha=alpha, zorder=0)#we plot the annulus edges as circles on the given axes
 
 
 def _interp_phi_on_radius(rho_query, rho_geo, phi_geo):
-    return np.interp(rho_query, rho_geo[::-1], phi_geo[::-1])
+    return np.interp(rho_query, rho_geo[::-1], phi_geo[::-1])#we interpolate the geodesic's phi values at the given query radius rho_query.
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +179,8 @@ def make_figure_5(sampler=_sample_inner_edge,
                 # ray_trace hardcodes const_nb = n_values[0] * B0.  To make the
                 # conserved Snell invariant equal to 1 * B_outside = b_inf, we
                 # feed it an effective B0 such that n_values[0] * B0_eff = b_inf.
-                B0_eff = B_outside / n_vals[0]
+                B0_eff = B_outside / n_vals[0]#we find B0 the impact parameter inside the first annulus.
+                #we use this B0_eff inside the ray tracing algorithm
 
                 rho_ray, phi_ray, status = ray_trace(
                     edges, n_vals, B0_eff, return_status=True
@@ -188,7 +188,7 @@ def make_figure_5(sampler=_sample_inner_edge,
 
                 if status["reached_inner"]:
                     delta_phi[ib, ia] = np.abs(
-                        np.degrees(phi_ray[-1] - phi_geo_h)
+                        np.degrees(phi_ray[-1] - phi_geo_h)#if it reached inner we store the value of the deviation at the horizon, in degrees.
                     )
                 elif compare_at_turn_radius and status["turn_radius"] is not None:
                     # Ray turned at rho_turn > P_min.  Compare its azimuth
@@ -201,14 +201,14 @@ def make_figure_5(sampler=_sample_inner_edge,
                             rho_turn, rho_geo, phi_geo
                         )
                         delta_phi[ib, ia] = np.abs(
-                            np.degrees(phi_ray[-1] - phi_geo_turn)
+                            np.degrees(phi_ray[-1] - phi_geo_turn)#if the ray turns before reaching the horizon, we compare its phi at the turning radius against the geodesic's phi at that same radius
                         )
                     else:
-                        delta_phi[ib, ia] = np.nan
+                        delta_phi[ib, ia] = np.nan#if the turning point is at a radius smaller than the smallest radius reached by the geodesic, we cannot compare and we leave the cell NaN
                 else:
-                    delta_phi[ib, ia] = np.nan
+                    delta_phi[ib, ia] = np.nan#if the ray didn't reach the inner radius and we are not comparing at the turn radius, we leave the cell NaN
             except Exception:
-                delta_phi[ib, ia] = np.nan
+                delta_phi[ib, ia] = np.nan#if our ray tunrs at some radius larger than P_min, we leave the cell NaN, which will be plotted as white, matching the paper's convention that the deviation at the horizon is undefined if the ray doesn't reach the horizon.
 
     fig, ax = plt.subplots(figsize=(7.0, 5.5))
     cmap = plt.cm.Purples.copy()
@@ -238,7 +238,7 @@ def make_figure_5(sampler=_sample_inner_edge,
     print(f"Saved {out_filename}")
 
 
-def make_figure_6():#does this function work
+def make_figure_6():
     print("=" * 60)
     print("Generating Figure 6")
     print("=" * 60)

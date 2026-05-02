@@ -20,7 +20,7 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 SCHWARZSCHILD_CASES = [
-    {"name": "schwarzschild_b2", "panel": "a", "b_inf": 2.6},
+    {"name": "schwarzschild_b2", "panel": "a", "b_inf": 1},
     {"name": "schwarzschild_b3", "panel": "b", "b_inf": 3.0},
     {"name": "schwarzschild_b4", "panel": "c", "b_inf": 4.0},
     {"name": "schwarzschild_b5", "panel": "d", "b_inf": 5.2},
@@ -99,14 +99,14 @@ def kn_auto_P_min(a, rho_Q, b_inf, safety=0.1):
 
 # Single source of truth for the impact parameter of the KN figure. Change
 # this in ONE place and every panel's P_min will update consistently.
-B_INF_KN = 5.409
+B_INF_KN = 2
 
 _kn_specs = [
     # panel,     name,                   a,          rho_Q,        ell_sign
     ("a",  "extremal_kerr_corot",        1.0,        0.0,           +1),
     ("b",  "extremal_rn",                0.0,        1.0,           +1),
-    ("c",  "kn_corot",                   2.0 / 5.0,  4.0 / 5.0,     +1),
-    ("d",  "kn_counter",                -2.0 / 5.0,  4.0 / 5.0,     +1),
+    ("c",  "kn_corot",                   0.4,        0.8,           +1),
+    ("d",  "kn_counter",                -0.4,       0.8,           +1),
 ]
 
 KERR_NEWMAN_CASES = [

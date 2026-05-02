@@ -243,12 +243,12 @@ def angular_deviation_at_horizon(edges, n_values, B0, rho_geo, phi_geo, P_horizo
     if len(rho_geo) < 2:
         return np.nan
 
-    phi_geo_h = np.interp(P_horizon, rho_geo[::-1], phi_geo[::-1])
-    return np.degrees(phi_ray[-1] - phi_geo_h)
+    phi_geo_h = np.interp(P_horizon, rho_geo[::-1], phi_geo[::-1])#we estimate the azimuthal angle of the geodesic at P_horizon, by interpolating.
+    return np.degrees(phi_ray[-1] - phi_geo_h)#angular deviation from geodesic at horizon, in degrees.
 
 
 def deviation_vs_radius(edges, n_values, B0, rho_geo, phi_geo):
     rho_ray, phi_ray, status = ray_trace(edges, n_values, B0, return_status=True)
     phi_geo_interp = np.interp(rho_ray, rho_geo[::-1], phi_geo[::-1])
     delta_phi = np.degrees(phi_ray - phi_geo_interp)
-    return rho_ray, delta_phi, status
+    return rho_ray, delta_phi, status# returns the angular deviation from the geodesic at each radius along the ray's trajectory, in degrees.
